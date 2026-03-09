@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { EuroChatLogo } from "@/components/EuroChatLogo";
 
 type ChatItem = {
@@ -28,6 +29,54 @@ const conversation: ChatItem[] = [
 ];
 
 export function DemoChat() {
+  const [visibleIds, setVisibleIds] = useState<string[]>([]);
+  const [typingId, setTypingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+
+    const schedule = (index: number) => {
+      if (index >= conversation.length) {
+        return;
+      }
+
+      const current = conversation[index];
+
+      if (current.role === "assistant") {
+        setTypingId(current.id);
+
+        const typingTimer = setTimeout(() => {
+          setTypingId(null);
+          setVisibleIds((prev) => [...prev, current.id]);
+
+          const nextTimer = setTimeout(() => {
+            schedule(index + 1);
+          }, 260);
+
+          timers.push(nextTimer);
+        }, 680);
+
+        timers.push(typingTimer);
+        return;
+      }
+
+      setVisibleIds((prev) => [...prev, current.id]);
+      const nextTimer = setTimeout(() => {
+        schedule(index + 1);
+      }, 360);
+
+      timers.push(nextTimer);
+    };
+
+    schedule(0);
+
+    return () => {
+      timers.forEach(clearTimeout);
+    };
+  }, []);
+
+  const visibleSet = useMemo(() => new Set(visibleIds), [visibleIds]);
+
   return (
     <div className="mx-auto w-full max-w-[410px] rounded-[2.7rem] bg-[#0b1018] p-2.5 shadow-[0_24px_70px_rgba(2,6,23,0.6)]">
       <section className="overflow-hidden rounded-[2.2rem] border border-[#2a3444] bg-[#ece5dd]">
@@ -46,16 +95,19 @@ export function DemoChat() {
         </header>
 
         <div className="space-y-2.5 bg-[radial-gradient(circle_at_25%_20%,rgba(255,255,255,0.42),transparent_33%),radial-gradient(circle_at_80%_65%,rgba(255,255,255,0.2),transparent_24%),linear-gradient(180deg,#efeae2_0%,#ece5dd_100%)] px-2.5 py-3">
-          {conversation.map((item, index) => {
+          {conversation.map((item) => {
             const isUser = item.role === "user";
+            const isVisible = visibleSet.has(item.id);
+            const isTyping = typingId === item.id && item.role === "assistant";
+
+            if (!isVisible && !isTyping) {
+              return null;
+            }
 
             return (
               <div key={item.id} className={`max-w-[83%] ${isUser ? "ml-auto" : ""}`}>
-                {!isUser ? (
-                  <div
-                    className="mb-1 inline-flex items-center gap-1 rounded-xl bg-white px-2.5 py-1 text-[10px] text-slate-500 shadow-sm animate-[bubbleIn_.2s_ease-out_both]"
-                    style={{ animationDelay: `${index * 60}ms` }}
-                  >
+                {isTyping ? (
+                  <div className="mb-1 inline-flex items-center gap-1 rounded-xl bg-white px-2.5 py-1 text-[10px] text-slate-500 shadow-sm animate-[bubbleIn_.2s_ease-out_both]">
                     EuroChat AI está escribiendo...
                     <span className="flex gap-1">
                       <span className="h-1.5 w-1.5 animate-[typingDot_1s_ease-in-out_infinite] rounded-full bg-slate-400" />
@@ -65,15 +117,16 @@ export function DemoChat() {
                   </div>
                 ) : null}
 
-                <article
-                  className={`animate-[bubbleIn_.28s_ease-out_both] rounded-2xl px-3 py-2 text-[13px] leading-relaxed shadow-sm ${
-                    isUser ? "rounded-br-md bg-[#DCF8C6] text-[#1f3120]" : "rounded-tl-md bg-white text-slate-800"
-                  }`}
-                  style={{ animationDelay: `${index * 70 + 40}ms` }}
-                >
-                  <p>{item.message}</p>
-                  <p className={`mt-1 text-right text-[10px] ${isUser ? "text-emerald-900/65" : "text-slate-500"}`}>{item.time}</p>
-                </article>
+                {isVisible ? (
+                  <article
+                    className={`animate-[bubbleIn_.28s_ease-out_both] rounded-2xl px-3 py-2 text-[13px] leading-relaxed shadow-sm ${
+                      isUser ? "rounded-br-md bg-[#DCF8C6] text-[#1f3120]" : "rounded-tl-md bg-white text-slate-800"
+                    }`}
+                  >
+                    <p>{item.message}</p>
+                    <p className={`mt-1 text-right text-[10px] ${isUser ? "text-emerald-900/65" : "text-slate-500"}`}>{item.time}</p>
+                  </article>
+                ) : null}
               </div>
             );
           })}
