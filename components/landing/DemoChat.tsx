@@ -9,22 +9,54 @@ type ChatItem = {
 };
 
 const conversation: ChatItem[] = [
-  { id: "u1", role: "user", message: "Café 3€", time: "18:41" },
-  { id: "a1", role: "assistant", message: "Gasto registrado", time: "18:41" },
-  { id: "u2", role: "user", message: "Uber 12€", time: "18:42" },
-  { id: "a2", role: "assistant", message: "Gasto registrado", time: "18:42" },
-  { id: "a3", role: "assistant", message: "Hoy gastaste 15€", time: "18:43" },
+  {
+    id: "u1",
+    role: "user",
+    message: "Supermercado 12€",
+    time: "18:41"
+  },
+  {
+    id: "a1",
+    role: "assistant",
+    message: "✅ Gasto registrado\nCategoría: Alimentación",
+    time: "18:41"
+  },
+  {
+    id: "a2",
+    role: "assistant",
+    message: "Hoy llevas 23€ gastados.",
+    time: "18:42"
+  },
+  {
+    id: "u2",
+    role: "user",
+    message: "¿Cómo voy este mes?",
+    time: "18:43"
+  },
+  {
+    id: "a3",
+    role: "assistant",
+    message: "📊 Marzo\n\nAlimentación: 210€\nTransporte: 55€\nOcio: 80€\n\nTotal: 345€",
+    time: "18:43"
+  },
   {
     id: "a4",
     role: "assistant",
-    message: "Si mantienes este ritmo, gastarás aproximadamente 1.240€ este mes.",
-    time: "18:44"
-  },
+    message: "Si mantienes este ritmo, terminarás el mes con aproximadamente 1.240€ gastados.",
+    time: "18:44",
+    prediction: true
+  } as ChatItem,
   {
     id: "a5",
     role: "assistant",
-    message: "⚠️ Podrías quedarte sin dinero el día 24.",
+    message: "Eso es un 14% más que el mes pasado.",
     time: "18:44"
+  },
+  {
+    id: "a6",
+    role: "assistant",
+    message: "⚠️ A este ritmo podrías quedarte sin dinero el día 24.",
+    time: "18:45"
   }
 ];
 
