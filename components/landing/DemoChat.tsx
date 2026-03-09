@@ -5,7 +5,6 @@ type ChatItem = {
   role: "user" | "assistant";
   message: string;
   time: string;
-  tone?: "default" | "wow" | "warning";
 };
 
 const quickActions = ["Café 3€", "Uber 12€", "Cena 20€"];
@@ -21,16 +20,14 @@ const conversation: ChatItem[] = [
   {
     id: "a5",
     role: "assistant",
-    message: "Si mantienes este ritmo de gasto, terminarás el mes con aproximadamente 1.240€ gastados.",
-    time: "18:44",
-    tone: "wow"
+    message: "Si mantienes este ritmo, gastarás aproximadamente 1.240€ este mes.",
+    time: "18:44"
   },
   {
     id: "a6",
     role: "assistant",
-    message: "⚠️ A este ritmo podrías quedarte sin dinero el día 24.",
-    time: "18:44",
-    tone: "warning"
+    message: "⚠️ Podrías quedarte sin dinero el día 24.",
+    time: "18:44"
   }
 ];
 
@@ -64,12 +61,8 @@ export function DemoChat() {
           {conversation.map((item, index) => {
             const isUser = item.role === "user";
             const bubbleClass = isUser
-              ? "ml-auto rounded-2xl rounded-br-md bg-[#dcf8c6] text-[#1f3120]"
-              : item.tone === "warning"
-                ? "rounded-2xl rounded-tl-md border border-amber-300/70 bg-amber-50 text-amber-900"
-                : item.tone === "wow"
-                  ? "rounded-2xl rounded-tl-md border border-mint/40 bg-gradient-to-br from-[#effff8] to-[#ddf7ee] text-emerald-950"
-                  : "rounded-2xl rounded-tl-md bg-white text-slate-800";
+              ? "ml-auto rounded-2xl rounded-br-md bg-[#DCF8C6] text-[#1f3120]"
+              : "rounded-2xl rounded-tl-md bg-white text-slate-800";
 
             return (
               <div key={item.id} className={`max-w-[88%] ${isUser ? "ml-auto" : ""}`}>
@@ -78,7 +71,7 @@ export function DemoChat() {
                     className="mb-1 inline-flex items-center gap-1.5 rounded-2xl rounded-tl-md bg-white px-3 py-1.5 text-[11px] text-slate-500 shadow-sm animate-[bubbleIn_.24s_ease-out_both]"
                     style={{ animationDelay: `${index * 85}ms` }}
                   >
-                    EuroChat AI está escribiendo
+                    EuroChat AI está escribiendo...
                     <span className="flex gap-1">
                       <span className="h-1.5 w-1.5 animate-[typingDot_1s_ease-in-out_infinite] rounded-full bg-slate-400" />
                       <span className="h-1.5 w-1.5 animate-[typingDot_1s_ease-in-out_.15s_infinite] rounded-full bg-slate-400" />
@@ -103,7 +96,6 @@ export function DemoChat() {
       <footer className="border-t border-[#d8d1c8] bg-[#f7f4ef] p-3">
         <div className="flex items-center gap-2 rounded-full border border-[#d9d1c7] bg-white px-3 py-2 shadow-sm">
           <span className="text-base text-slate-400">😊</span>
-          <span className="text-base text-slate-400">📎</span>
           <span className="flex-1 text-left text-sm text-slate-400">Escribe un mensaje...</span>
           <span className="grid h-7 w-7 place-items-center rounded-full bg-[#24c160] text-xs text-white">➤</span>
         </div>
