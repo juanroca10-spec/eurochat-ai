@@ -223,30 +223,6 @@ async function getMonthSummary(waId: string) {
   return { summary, total, rows };
 }
 
-async function getCategoryTotal(
-  waId: string,
-  category: string,
-  period: "today" | "month"
-) {
-  const range =
-    period === "today" ? getTodayDateRange() : getMonthDateRange();
-
-  const { data, error } = await supabase
-    .from("expenses")
-    .select("amount")
-    .eq("wa_id", waId)
-    .eq("category", category)
-    .gte("created_at", range.start)
-    .lte("created_at", range.end);
-
-  if (error) {
-    console.error("SUPABASE CATEGORY TOTAL ERROR:", error);
-    return null;
-  }
-
-  return (data || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
-}
-
 async function getLastExpenses(waId: string, limit = 5) {
   const { data, error } = await supabase
     .from("expenses")
@@ -683,6 +659,37 @@ async function buildDailyControlMessage(waId: string) {
   )}€ hasta el fin del mes.`;
 }
 
+async function markIncomingMessageAsRead(messageId: string) {
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID || !messageId) {
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          status: "read",
+          message_id: messageId,
+        }),
+      }
+    );
+
+    const resultText = await response.text();
+
+    console.log("MARK AS READ STATUS:", response.status);
+    console.log("MARK AS READ RESPONSE:", resultText);
+  } catch (error) {
+    console.error("MARK AS READ ERROR:", error);
+  }
+}
+
 async function buildReply(message: string, waId: string) {
   const text = normalizeText(message);
 
@@ -971,14 +978,20 @@ export async function POST(req: NextRequest) {
 
     const from = message.from;
     const text = message?.text?.body?.trim() || "";
+    const messageId = message?.id || "";
     const contactName =
       body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name;
 
     console.log("FROM:", from);
     console.log("TEXT:", text);
+    console.log("MESSAGE ID:", messageId);
 
     await ensureUserExists(from, contactName);
     await saveMessage(from, text, "incoming");
+
+    if (messageId) {
+      await markIncomingMessageAsRead(messageId);
+    }
 
     const { reply, parsed, shouldSaveExpense } = await buildReply(text, from);
 
