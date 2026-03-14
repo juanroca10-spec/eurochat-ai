@@ -8,6 +8,11 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
+const MONTHLY_PAYMENT_LINK =
+  "https://buy.stripe.com/test_dRm4gA7tY4TT8a58WI7bW00";
+const YEARLY_PAYMENT_LINK =
+  "https://buy.stripe.com/test_28E14oeWqgCBbmh1ug7bW01";
+
 type ParsedExpense = {
   amount: number | null;
   category: string;
@@ -34,6 +39,10 @@ function formatDateShort(dateString: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function normalizePhoneDigits(value: string) {
+  return (value || "").replace(/\D/g, "");
 }
 
 function getTodayDateRange() {
@@ -69,6 +78,59 @@ function getMonthDateRange() {
     start: start.toISOString(),
     end: end.toISOString(),
   };
+}
+
+async function hasActiveSubscription(waId: string) {
+  const normalized = normalizePhoneDigits(waId);
+
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select("status, current_period_end, wa_id")
+    .in("wa_id", [normalized, `+${normalized}`]);
+
+  if (error) {
+    console.error("SUBSCRIPTION CHECK ERROR:", error);
+    return false;
+  }
+
+  const subscription = (data || []).find((item) => item.status === "active");
+
+  if (!subscription) return false;
+
+  if (!subscription.current_period_end) return true;
+
+  const now = new Date();
+  const end = new Date(subscription.current_period_end);
+
+  return end > now;
+}
+
+function buildSubscriptionPitchMessage() {
+  return [
+    "🚀 EuroChat AI",
+    "",
+    "Controla tus gastos por WhatsApp en segundos, sin hojas, sin apps complejas y sin perder tiempo.",
+    "",
+    "Con tu plan obtienes:",
+    "• registro ilimitado de gastos",
+    "• resúmenes automáticos",
+    "• proyección del mes",
+    "• ranking de categorías",
+    "• consejos y reportes automáticos",
+    "",
+    "💳 Elige tu plan:",
+    "",
+    "Mensual — 10€/mes",
+    `${MONTHLY_PAYMENT_LINK}`,
+    "",
+    "🔥 Anual — 50€/año",
+    `Solo 4,16€/mes`,
+    `${YEARLY_PAYMENT_LINK}`,
+    "",
+    "El plan anual es la mejor opción: pagas mucho menos y mantienes el control todo el año.",
+    "",
+    "Activa tu acceso y empieza ahora.",
+  ].join("\n");
 }
 
 async function ensureUserExists(waId: string, name?: string) {
@@ -690,6 +752,34 @@ async function markIncomingMessageAsRead(messageId: string) {
   }
 }
 
+async function sendWhatsAppText(to: string, body: string) {
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.error("Missing WhatsApp env vars.");
+    return;
+  }
+
+  const response = await fetch(
+    `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to,
+        type: "text",
+        text: { body },
+      }),
+    }
+  );
+
+  const resultText = await response.text();
+  console.log("SEND MESSAGE STATUS:", response.status);
+  console.log("SEND MESSAGE RESPONSE:", resultText);
+}
+
 async function buildReply(message: string, waId: string) {
   const text = normalizeText(message);
 
@@ -993,6 +1083,15 @@ export async function POST(req: NextRequest) {
       await markIncomingMessageAsRead(messageId);
     }
 
+    const hasAccess = await hasActiveSubscription(from);
+
+    if (!hasAccess) {
+      const salesMessage = buildSubscriptionPitchMessage();
+      await sendWhatsAppText(from, salesMessage);
+      await saveMessage(from, salesMessage, "outgoing");
+      return NextResponse.json({ received: true }, { status: 200 });
+    }
+
     const { reply, parsed, shouldSaveExpense } = await buildReply(text, from);
 
     console.log("PARSED:", parsed);
@@ -1017,35 +1116,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-      console.error("Faltan variáveis de ambiente do WhatsApp.");
-      return NextResponse.json({ received: true }, { status: 200 });
-    }
-
-    const metaResponse = await fetch(
-      `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: from,
-          type: "text",
-          text: {
-            body: finalReply,
-          },
-        }),
-      }
-    );
-
-    const metaResultText = await metaResponse.text();
-
-    console.log("META STATUS:", metaResponse.status);
-    console.log("META RESPONSE:", metaResultText);
-
+    await sendWhatsAppText(from, finalReply);
     await saveMessage(from, finalReply, "outgoing");
 
     return NextResponse.json({ received: true }, { status: 200 });
