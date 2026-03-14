@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron?job=reports",
+      "schedule": "0 21 * * *"
+    },
+    {
+      "path": "/api/cron?job=tips",
+      "schedule": "0 11 * * 1-5"
+    }
+  ]
+}

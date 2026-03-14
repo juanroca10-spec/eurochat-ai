@@ -1,0 +1,1043 @@
+import { NextRequest, NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
+
+const VERIFY_TOKEN =
+  process.env.WHATSAPP_VERIFY_TOKEN || "eurochat_verify_token";
+
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+type ParsedExpense = {
+  amount: number | null;
+  category: string;
+  description: string;
+};
+
+function normalizeText(message: string) {
+  return message
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+}
+
+function formatAmount(value: number) {
+  return Number(value.toFixed(2)).toString().replace(".", ",");
+}
+
+function formatDateShort(dateString: string) {
+  const date = new Date(dateString);
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function getTodayDateRange() {
+  const now = new Date();
+
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+}
+
+function getMonthDateRange() {
+  const now = new Date();
+
+  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const end = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    0,
+    23,
+    59,
+    59,
+    999
+  );
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+}
+
+async function ensureUserExists(waId: string, name?: string) {
+  const { data, error } = await supabase
+    .from("users")
+    .select("wa_id")
+    .eq("wa_id", waId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("USER LOOKUP ERROR:", error);
+    return;
+  }
+
+  if (!data) {
+    const { error: insertError } = await supabase.from("users").insert({
+      wa_id: waId,
+      name: name || null,
+    });
+
+    if (insertError) {
+      console.error("USER INSERT ERROR:", insertError);
+    }
+  }
+}
+
+async function saveMessage(
+  waId: string,
+  message: string,
+  direction: "incoming" | "outgoing"
+) {
+  const { error } = await supabase.from("messages").insert({
+    wa_id: waId,
+    message,
+    direction,
+  });
+
+  if (error) {
+    console.error("MESSAGE SAVE ERROR:", error);
+  }
+}
+
+async function getRecentIncomingMessages(waId: string, limit = 5) {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("message, created_at")
+    .eq("wa_id", waId)
+    .eq("direction", "incoming")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("RECENT MESSAGES ERROR:", error);
+    return [];
+  }
+
+  return data || [];
+}
+
+async function getTodayTotal(waId: string) {
+  const { start, end } = getTodayDateRange();
+
+  const { data, error } = await supabase
+    .from("expenses")
+    .select("amount")
+    .eq("wa_id", waId)
+    .gte("created_at", start)
+    .lte("created_at", end);
+
+  if (error) {
+    console.error("SUPABASE TODAY TOTAL ERROR:", error);
+    return null;
+  }
+
+  return (data || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+}
+
+async function getTodayExpenseCount(waId: string) {
+  const { start, end } = getTodayDateRange();
+
+  const { count, error } = await supabase
+    .from("expenses")
+    .select("*", { count: "exact", head: true })
+    .eq("wa_id", waId)
+    .gte("created_at", start)
+    .lte("created_at", end);
+
+  if (error) {
+    console.error("SUPABASE TODAY COUNT ERROR:", error);
+    return null;
+  }
+
+  return count || 0;
+}
+
+async function getTodaySummary(waId: string) {
+  const { start, end } = getTodayDateRange();
+
+  const { data, error } = await supabase
+    .from("expenses")
+    .select("amount, category")
+    .eq("wa_id", waId)
+    .gte("created_at", start)
+    .lte("created_at", end);
+
+  if (error) {
+    console.error("SUPABASE TODAY SUMMARY ERROR:", error);
+    return null;
+  }
+
+  const rows = data || [];
+
+  const summary = rows.reduce<Record<string, number>>((acc, item) => {
+    const category = item.category || "Otros";
+    const amount = Number(item.amount || 0);
+    acc[category] = (acc[category] || 0) + amount;
+    return acc;
+  }, {});
+
+  const total = rows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  return { summary, total };
+}
+
+async function getMonthSummary(waId: string) {
+  const { start, end } = getMonthDateRange();
+
+  const { data, error } = await supabase
+    .from("expenses")
+    .select("amount, category")
+    .eq("wa_id", waId)
+    .gte("created_at", start)
+    .lte("created_at", end)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("SUPABASE MONTH SUMMARY ERROR:", error);
+    return null;
+  }
+
+  const rows = data || [];
+
+  const summary = rows.reduce<Record<string, number>>((acc, item) => {
+    const category = item.category || "Otros";
+    const amount = Number(item.amount || 0);
+    acc[category] = (acc[category] || 0) + amount;
+    return acc;
+  }, {});
+
+  const total = rows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  return { summary, total, rows };
+}
+
+async function getCategoryTotal(
+  waId: string,
+  category: string,
+  period: "today" | "month"
+) {
+  const range =
+    period === "today" ? getTodayDateRange() : getMonthDateRange();
+
+  const { data, error } = await supabase
+    .from("expenses")
+    .select("amount")
+    .eq("wa_id", waId)
+    .eq("category", category)
+    .gte("created_at", range.start)
+    .lte("created_at", range.end);
+
+  if (error) {
+    console.error("SUPABASE CATEGORY TOTAL ERROR:", error);
+    return null;
+  }
+
+  return (data || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+}
+
+async function getLastExpenses(waId: string, limit = 5) {
+  const { data, error } = await supabase
+    .from("expenses")
+    .select("amount, category, description, created_at")
+    .eq("wa_id", waId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("SUPABASE LAST EXPENSES ERROR:", error);
+    return null;
+  }
+
+  return data || [];
+}
+
+async function deleteLastExpense(waId: string) {
+  const { data, error } = await supabase
+    .from("expenses")
+    .select("id, amount, category, description")
+    .eq("wa_id", waId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("SUPABASE DELETE LAST LOOKUP ERROR:", error);
+    return null;
+  }
+
+  if (!data) return false;
+
+  const { error: deleteError } = await supabase
+    .from("expenses")
+    .delete()
+    .eq("id", data.id);
+
+  if (deleteError) {
+    console.error("SUPABASE DELETE LAST ERROR:", deleteError);
+    return null;
+  }
+
+  return data;
+}
+
+function getTopCategory(summary: Record<string, number>) {
+  const entries = Object.entries(summary);
+  if (entries.length === 0) return null;
+
+  entries.sort((a, b) => b[1] - a[1]);
+  return {
+    category: entries[0][0],
+    amount: entries[0][1],
+  };
+}
+
+function buildCategoryRanking(summary: Record<string, number>) {
+  const entries = Object.entries(summary);
+
+  if (entries.length === 0) return null;
+
+  entries.sort((a, b) => b[1] - a[1]);
+
+  const medals = ["🥇", "🥈", "🥉"];
+
+  const lines = entries.map(([category, amount], index) => {
+    const prefix = index < 3 ? medals[index] : `${index + 1}️⃣`;
+    return `${prefix} ${category} — ${formatAmount(amount)}€`;
+  });
+
+  return lines.join("\n");
+}
+
+async function getUsageBasedProjection(waId: string) {
+  const now = new Date();
+
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const monthEnd = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    0,
+    23,
+    59,
+    59,
+    999
+  );
+
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+
+  const todayEnd = new Date(now);
+  todayEnd.setHours(23, 59, 59, 999);
+
+  const { data: monthExpenses, error: monthError } = await supabase
+    .from("expenses")
+    .select("amount, created_at")
+    .eq("wa_id", waId)
+    .gte("created_at", monthStart.toISOString())
+    .lte("created_at", monthEnd.toISOString())
+    .order("created_at", { ascending: true });
+
+  if (monthError) {
+    console.error("SUPABASE PROJECTION MONTH ERROR:", monthError);
+    return null;
+  }
+
+  const rows = monthExpenses || [];
+
+  if (rows.length === 0) {
+    return {
+      totalToday: 0,
+      totalSinceStart: 0,
+      daysOfUse: 0,
+      daysRemaining: 0,
+      projection: 0,
+      mode: "none" as const,
+    };
+  }
+
+  const firstExpenseDate = new Date(rows[0].created_at);
+  const firstUsageDay = new Date(firstExpenseDate);
+  firstUsageDay.setHours(0, 0, 0, 0);
+
+  const totalToday = rows
+    .filter((item) => {
+      const d = new Date(item.created_at);
+      return d >= todayStart && d <= todayEnd;
+    })
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  const totalSinceStart = rows.reduce(
+    (sum, item) => sum + Number(item.amount || 0),
+    0
+  );
+
+  const msPerDay = 1000 * 60 * 60 * 24;
+  const daysOfUse =
+    Math.floor((todayStart.getTime() - firstUsageDay.getTime()) / msPerDay) + 1;
+
+  const daysInMonth = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    0
+  ).getDate();
+
+  const currentDay = now.getDate();
+  const daysRemaining = Math.max(daysInMonth - currentDay, 0);
+
+  let projection = 0;
+  let mode: "first_day" | "average" | "none" = "none";
+
+  if (daysOfUse <= 1) {
+    projection = totalToday * daysRemaining;
+    mode = "first_day";
+  } else {
+    const dailyAverage = totalSinceStart / daysOfUse;
+    projection = dailyAverage * daysRemaining;
+    mode = "average";
+  }
+
+  return {
+    totalToday,
+    totalSinceStart,
+    daysOfUse,
+    daysRemaining,
+    projection,
+    mode,
+  };
+}
+
+function parseExpenseWithRules(message: string): ParsedExpense {
+  const text = normalizeText(message);
+
+  const amountMatch =
+    text.match(/(\d+[.,]?\d*)\s*€/) ||
+    text.match(/€\s*(\d+[.,]?\d*)/) ||
+    text.match(/(\d+[.,]?\d*)/);
+
+  const amount = amountMatch ? Number(amountMatch[1].replace(",", ".")) : null;
+
+  let category = "Otros";
+
+  if (
+    text.includes("supermercado") ||
+    text.includes("mercado") ||
+    text.includes("mercadona") ||
+    text.includes("lidl") ||
+    text.includes("carrefour") ||
+    text.includes("dia") ||
+    text.includes("cafe") ||
+    text.includes("cafeteria") ||
+    text.includes("restaurante") ||
+    text.includes("comida") ||
+    text.includes("cena") ||
+    text.includes("almuerzo") ||
+    text.includes("desayuno") ||
+    text.includes("merienda")
+  ) {
+    category = "Alimentación";
+  } else if (
+    text.includes("uber") ||
+    text.includes("taxi") ||
+    text.includes("cabify") ||
+    text.includes("bolt") ||
+    text.includes("metro") ||
+    text.includes("tren") ||
+    text.includes("bus") ||
+    text.includes("autobus") ||
+    text.includes("transporte") ||
+    text.includes("gasolina") ||
+    text.includes("parking") ||
+    text.includes("peaje") ||
+    text.includes("aeropuerto")
+  ) {
+    category = "Transporte";
+  } else if (
+    text.includes("cine") ||
+    text.includes("netflix") ||
+    text.includes("spotify") ||
+    text.includes("ocio") ||
+    text.includes("bar") ||
+    text.includes("fiesta") ||
+    text.includes("discoteca") ||
+    text.includes("copas") ||
+    text.includes("cerveza") ||
+    text.includes("vino")
+  ) {
+    category = "Ocio";
+  } else if (
+    text.includes("farmacia") ||
+    text.includes("medico") ||
+    text.includes("medicina") ||
+    text.includes("salud") ||
+    text.includes("hospital")
+  ) {
+    category = "Salud";
+  }
+
+  return {
+    amount,
+    category,
+    description: message.trim(),
+  };
+}
+
+function looksLikeContinuation(message: string) {
+  const text = normalizeText(message);
+
+  if (/^\d+[.,]?\d*\s*€?$/.test(text)) return true;
+  if (text.startsWith("y ")) return true;
+  if (text.startsWith("tambien ")) return true;
+  if (text.startsWith("también ")) return true;
+  if (text.startsWith("en ")) return true;
+  if (text.startsWith("de ")) return true;
+
+  return false;
+}
+
+function mergeWithContext(currentMessage: string, previousMessages: string[]) {
+  if (!looksLikeContinuation(currentMessage)) {
+    return currentMessage;
+  }
+
+  const lastRelevant = previousMessages.find((msg) => {
+    const normalized = normalizeText(msg);
+
+    if (normalized === normalizeText(currentMessage)) return false;
+    if (normalized === "hola") return false;
+    if (normalized === "ayuda") return false;
+    if (normalized.includes("resumen")) return false;
+    if (normalized.includes("total")) return false;
+    if (normalized.includes("proyeccion")) return false;
+    if (normalized.includes("ranking")) return false;
+
+    return true;
+  });
+
+  if (!lastRelevant) return currentMessage;
+
+  return `${lastRelevant} ${currentMessage}`;
+}
+
+async function parseExpenseWithOpenAI(
+  message: string,
+  contextMessages: string[]
+): Promise<ParsedExpense | null> {
+  if (!OPENAI_API_KEY) return null;
+
+  const contextBlock = contextMessages.length
+    ? contextMessages.map((m, i) => `${i + 1}. ${m}`).join("\n")
+    : "Sin contexto previo.";
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        input: `Extrae un gasto financiero del mensaje del usuario usando también el contexto reciente si ayuda.
+
+Devuelve SOLO JSON válido, sin markdown, sin explicación, sin texto extra.
+
+Formato exacto:
+{
+  "amount": number | null,
+  "category": "Alimentación" | "Transporte" | "Ocio" | "Salud" | "Otros",
+  "description": string
+}
+
+Reglas:
+- Usa el contexto solo si la última frase depende de mensajes anteriores.
+- Si no hay importe claro, amount = null.
+- La descripción debe ser breve y útil.
+- No inventes datos.
+
+Contexto reciente:
+${contextBlock}
+
+Mensaje actual:
+${message}`,
+      }),
+    });
+
+    const result = await response.json();
+
+    const outputText =
+      result?.output?.[0]?.content?.[0]?.text ||
+      result?.output_text ||
+      "";
+
+    if (!outputText) {
+      console.error("OPENAI EMPTY RESPONSE:", result);
+      return null;
+    }
+
+    const parsed = JSON.parse(outputText.trim());
+
+    return {
+      amount:
+        typeof parsed.amount === "number" ? parsed.amount : null,
+      category:
+        typeof parsed.category === "string" ? parsed.category : "Otros",
+      description:
+        typeof parsed.description === "string"
+          ? parsed.description
+          : message.trim(),
+    };
+  } catch (error) {
+    console.error("OPENAI PARSE ERROR:", error);
+    return null;
+  }
+}
+
+async function parseExpenseSmart(message: string, waId: string) {
+  const recentMessagesRows = await getRecentIncomingMessages(waId, 5);
+  const recentMessages = recentMessagesRows.map((row) => row.message);
+
+  const mergedMessage = mergeWithContext(message, recentMessages);
+  const ruleParsed = parseExpenseWithRules(mergedMessage);
+
+  const shouldUseAI =
+    ruleParsed.amount === null ||
+    ruleParsed.category === "Otros" ||
+    mergedMessage !== message;
+
+  if (!shouldUseAI) {
+    return ruleParsed;
+  }
+
+  console.log("Using OpenAI fallback for parsing:", message);
+  console.log("Merged context message:", mergedMessage);
+
+  const aiParsed = await parseExpenseWithOpenAI(mergedMessage, recentMessages);
+
+  if (aiParsed && aiParsed.amount !== null) {
+    console.log("AI PARSED RESULT:", aiParsed);
+    return aiParsed;
+  }
+
+  return ruleParsed;
+}
+
+async function buildDailyControlMessage(waId: string) {
+  const todayTotal = await getTodayTotal(waId);
+  const todayCount = await getTodayExpenseCount(waId);
+  const projectionData = await getUsageBasedProjection(waId);
+
+  if (
+    todayTotal === null ||
+    todayCount === null ||
+    !projectionData ||
+    projectionData.daysOfUse === 0
+  ) {
+    return "";
+  }
+
+  if (todayCount < 3) {
+    return "";
+  }
+
+  const { totalSinceStart, daysOfUse, projection } = projectionData;
+
+  if (daysOfUse === 1) {
+    return `\n\n⚠️ Hoy ya gastaste ${formatAmount(
+      todayTotal
+    )}€.\n\n🔴 Control del día: alto.\nComo acabas de empezar a usar EuroChat, esta proyección es inicial.\nSi sigues así, podrías gastar ${formatAmount(
+      projection
+    )}€ hasta el fin del mes.`;
+  }
+
+  const dailyAverage = totalSinceStart / daysOfUse;
+
+  if (todayTotal < dailyAverage * 0.9) {
+    return `\n\nHoy llevas ${formatAmount(
+      todayTotal
+    )}€ gastados.\n\n🟢 Control del día: muy bien.\nEstás por debajo de tu media diaria desde que empezaste a usar EuroChat.`;
+  }
+
+  if (todayTotal <= dailyAverage * 1.2) {
+    return `\n\nHoy llevas ${formatAmount(
+      todayTotal
+    )}€ gastados.\n\n🟠 Control del día: cuidado.\nYa superaste tu media diaria desde que empezaste a usar EuroChat.`;
+  }
+
+  return `\n\n⚠️ Hoy ya gastaste ${formatAmount(
+    todayTotal
+  )}€.\n\n🔴 Control del día: alto.\nTu media diaria desde que empezaste es ${formatAmount(
+    dailyAverage
+  )}€.\nSi sigues así, podrías gastar ${formatAmount(
+    projection
+  )}€ hasta el fin del mes.`;
+}
+
+async function buildReply(message: string, waId: string) {
+  const text = normalizeText(message);
+
+  if (text === "hola" || text === "hi" || text === "hello") {
+    return {
+      reply:
+        "Hola 👋 Soy EuroChat AI.\n\nTe ayudo a controlar tus gastos por WhatsApp.\n\nPuedes escribir:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• gasté 12€ en supermercado\n• pagué 8€ de taxi\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• proyeccion\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  if (
+    text === "total hoy" ||
+    text === "gaste hoy" ||
+    text === "gasté hoy" ||
+    text === "cuanto gaste hoy" ||
+    text === "cuánto gasté hoy" ||
+    text === "cuanto gaste hoy?" ||
+    text === "cuánto gasté hoy?"
+  ) {
+    const total = await getTodayTotal(waId);
+
+    return {
+      reply:
+        total === null
+          ? "No pude calcular tu total de hoy."
+          : `Hoy has gastado ${formatAmount(total)}€`,
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  if (
+    text === "resumen" ||
+    text === "resumen hoy" ||
+    text === "resumen de hoy"
+  ) {
+    const todaySummary = await getTodaySummary(waId);
+
+    if (!todaySummary) {
+      return {
+        reply: "No pude generar tu resumen de hoy.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    const { summary, total } = todaySummary;
+    const categories = Object.entries(summary);
+
+    if (categories.length === 0) {
+      return {
+        reply: "Hoy todavía no tienes gastos registrados.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    const lines = categories.map(
+      ([category, amount]) => `• ${category}: ${formatAmount(amount)}€`
+    );
+
+    return {
+      reply: `📊 Resumen de hoy\n\n${lines.join("\n")}\n\nTotal: ${formatAmount(
+        total
+      )}€`,
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  if (text === "resumen mes" || text === "mes por categoria") {
+    const monthSummary = await getMonthSummary(waId);
+
+    if (!monthSummary) {
+      return {
+        reply: "No pude generar tu resumen mensual.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    const entries = Object.entries(monthSummary.summary);
+
+    if (entries.length === 0) {
+      return {
+        reply: "Este mes todavía no tienes gastos registrados.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    const lines = entries.map(
+      ([category, amount]) => `• ${category}: ${formatAmount(amount)}€`
+    );
+
+    return {
+      reply: `📊 Resumen del mes\n\n${lines.join("\n")}\n\nTotal: ${formatAmount(
+        monthSummary.total
+      )}€`,
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  if (
+    text === "ranking" ||
+    text === "ranking mes" ||
+    text === "ranking categorias"
+  ) {
+    const monthSummary = await getMonthSummary(waId);
+
+    if (!monthSummary) {
+      return {
+        reply: "No pude calcular tu ranking este mes.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    const ranking = buildCategoryRanking(monthSummary.summary);
+
+    if (!ranking) {
+      return {
+        reply: "Este mes todavía no tienes gastos registrados.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    return {
+      reply: `📊 Tu ranking de gastos este mes\n\n${ranking}\n\nTotal: ${formatAmount(
+        monthSummary.total
+      )}€`,
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  if (text === "proyeccion" || text === "proyeccion mes") {
+    const projectionData = await getUsageBasedProjection(waId);
+
+    if (!projectionData || projectionData.daysOfUse === 0) {
+      return {
+        reply: "Todavía no tienes suficientes gastos este mes para proyectar.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    if (projectionData.daysOfUse === 1) {
+      return {
+        reply: `📈 Proyección inicial\n\nHoy has gastado ${formatAmount(
+          projectionData.totalToday
+        )}€.\nSi sigues así, podrías gastar ${formatAmount(
+          projectionData.projection
+        )}€ hasta el fin del mes.`,
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    const monthSummary = await getMonthSummary(waId);
+    const topCategory = monthSummary
+      ? getTopCategory(monthSummary.summary)
+      : null;
+
+    return {
+      reply: `📈 Proyección del mes\n\nTu media diaria desde que empezaste es ${formatAmount(
+        projectionData.totalSinceStart / projectionData.daysOfUse
+      )}€.\nSi sigues así, podrías gastar ${formatAmount(
+        projectionData.projection
+      )}€ hasta el fin del mes.${
+        topCategory
+          ? `\n\nTu categoría principal es ${topCategory.category} con ${formatAmount(
+              topCategory.amount
+            )}€.`
+          : ""
+      }`,
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  if (text === "ultimos gastos" || text === "ultimos 5 gastos") {
+    const expenses = await getLastExpenses(waId, 5);
+
+    if (!expenses || expenses.length === 0) {
+      return {
+        reply: "Todavía no tienes gastos registrados.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    const lines = expenses.map(
+      (item) =>
+        `• ${item.description} — ${formatAmount(Number(item.amount))}€ (${item.category})\n  ${formatDateShort(
+          item.created_at
+        )}`
+    );
+
+    return {
+      reply: `🧾 Últimos gastos\n\n${lines.join("\n\n")}`,
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  if (text === "borrar ultimo gasto" || text === "borrar ultimo") {
+    const deleted = await deleteLastExpense(waId);
+
+    if (deleted === null) {
+      return {
+        reply: "No pude borrar tu último gasto.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    if (deleted === false) {
+      return {
+        reply: "No tienes gastos para borrar.",
+        parsed: { amount: null, category: "Otros", description: message.trim() },
+        shouldSaveExpense: false,
+      };
+    }
+
+    return {
+      reply: `🗑️ Último gasto borrado\n\n${deleted.description} — ${formatAmount(
+        Number(deleted.amount)
+      )}€ (${deleted.category})`,
+      parsed: { amount: null, category: "Otros", description: message.trim() },
+      shouldSaveExpense: false,
+    };
+  }
+
+  const parsed = await parseExpenseSmart(message, waId);
+
+  if (parsed.amount === null) {
+    return {
+      reply:
+        "No entendí el gasto.\n\nPrueba algo como:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• gasté 12€ en supermercado\n• pagué 8€ de taxi",
+      parsed,
+      shouldSaveExpense: false,
+    };
+  }
+
+  return {
+    reply: `✅ Gasto registrado\nCategoría: ${parsed.category}\nImporte: ${formatAmount(
+      parsed.amount
+    )}€`,
+    parsed,
+    shouldSaveExpense: true,
+  };
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+
+  const mode = searchParams.get("hub.mode");
+  const token = searchParams.get("hub.verify_token");
+  const challenge = searchParams.get("hub.challenge");
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN && challenge) {
+    return new NextResponse(challenge, { status: 200 });
+  }
+
+  return NextResponse.json({ error: "Verification failed" }, { status: 403 });
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+
+    console.log("WHATSAPP WEBHOOK EVENT:");
+    console.log(JSON.stringify(body, null, 2));
+
+    const message = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+
+    if (!message) {
+      console.log("Nenhuma mensagem encontrada no payload.");
+      return NextResponse.json({ received: true }, { status: 200 });
+    }
+
+    const from = message.from;
+    const text = message?.text?.body?.trim() || "";
+    const contactName =
+      body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name;
+
+    console.log("FROM:", from);
+    console.log("TEXT:", text);
+
+    await ensureUserExists(from, contactName);
+    await saveMessage(from, text, "incoming");
+
+    const { reply, parsed, shouldSaveExpense } = await buildReply(text, from);
+
+    console.log("PARSED:", parsed);
+    console.log("REPLY:", reply);
+
+    let finalReply = reply;
+
+    if (shouldSaveExpense && parsed.amount !== null) {
+      const { error } = await supabase.from("expenses").insert({
+        wa_id: from,
+        amount: parsed.amount,
+        category: parsed.category,
+        description: parsed.description,
+        source: "whatsapp",
+      });
+
+      if (error) {
+        console.error("SUPABASE INSERT ERROR:", error);
+      } else {
+        console.log("Expense saved successfully.");
+        finalReply += await buildDailyControlMessage(from);
+      }
+    }
+
+    if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+      console.error("Faltan variáveis de ambiente do WhatsApp.");
+      return NextResponse.json({ received: true }, { status: 200 });
+    }
+
+    const metaResponse = await fetch(
+      `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: from,
+          type: "text",
+          text: {
+            body: finalReply,
+          },
+        }),
+      }
+    );
+
+    const metaResultText = await metaResponse.text();
+
+    console.log("META STATUS:", metaResponse.status);
+    console.log("META RESPONSE:", metaResultText);
+
+    await saveMessage(from, finalReply, "outgoing");
+
+    return NextResponse.json({ received: true }, { status: 200 });
+  } catch (error) {
+    console.error("Webhook POST error:", error);
+    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+  }
+}
