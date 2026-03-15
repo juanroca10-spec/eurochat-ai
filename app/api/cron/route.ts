@@ -530,9 +530,23 @@ function buildBillsReminderMessage(bills: BillRow[]) {
       }`
   );
 
-  return `🔔 Recordatorio de pago\n\nHoy vencen estas cuentas:\n\n${lines.join(
+  const examples = bills
+    .filter((b) => b.amount !== null)
+    .map((b) => `${b.title} ${formatAmount(Number(b.amount))}€`)
+    .slice(0, 2);
+
+  const exampleText =
+    examples.length > 0
+      ? `\n\nSi ya ${
+          bills.length > 1 ? "pagaste alguna, puedes registrarla ahora escribiendo:" : "la pagaste, puedes registrarla ahora escribiendo:"
+        }\n${examples.join("\n")}`
+      : "";
+
+  return `🔔 Recordatorio de pago\n\nHoy ${
+    bills.length > 1 ? "vencen estas cuentas:" : "vence esta cuenta:"
+  }\n\n${lines.join(
     "\n"
-  )}\n\nEvita olvidos y mantén tu control al día.`;
+  )}\n\nEvita olvidos y mantén tu control al día.${exampleText}`;
 }
 
 async function runBillsJob(todayYmd: string) {
