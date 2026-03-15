@@ -128,6 +128,7 @@ function buildSubscriptionPitchMessage() {
     "",
     "Con tu plan obtienes:",
     "• registro ilimitado de gastos",
+    "• registro de ingresos",
     "• resúmenes automáticos",
     "• proyección del mes",
     "• ranking de categorías",
@@ -298,6 +299,45 @@ async function getMonthSummary(waId: string) {
   const total = rows.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
   return { summary, total, rows };
+}
+
+async function getMonthCashflow(waId: string) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  const startDate = monthStart.toISOString().slice(0, 10);
+  const endDate = monthEnd.toISOString().slice(0, 10);
+
+  const { data, error } = await supabase
+    .from("cashflow_entries")
+    .select("amount, type")
+    .eq("wa_id", waId)
+    .gte("entry_date", startDate)
+    .lte("entry_date", endDate);
+
+  if (error) {
+    console.error("SUPABASE MONTH CASHFLOW ERROR:", error);
+    return null;
+  }
+
+  const rows = data || [];
+
+  const income = rows
+    .filter((item) => item.type === "income")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  const expenses = rows
+    .filter((item) => item.type === "expense")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+  const available = income - expenses;
+
+  return {
+    income,
+    expenses,
+    available,
+  };
 }
 
 async function getLastExpenses(waId: string, limit = 5) {
@@ -580,6 +620,8 @@ function mergeWithContext(currentMessage: string, previousMessages: string[]) {
     if (normalized.includes("total")) return false;
     if (normalized.includes("proyeccion")) return false;
     if (normalized.includes("ranking")) return false;
+    if (normalized.includes("saldo")) return false;
+    if (normalized.includes("dinero disponible")) return false;
 
     return true;
   });
@@ -789,7 +831,7 @@ async function sendWhatsAppText(to: string, body: string) {
 
   const response = await fetch(
     `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
-    {
+      {
       method: "POST",
       headers: {
         Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -815,7 +857,44 @@ async function buildReply(message: string, waId: string) {
   if (text === "hola" || text === "hi" || text === "hello") {
     return {
       reply:
-        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos e ingresos por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• proyeccion\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos e ingresos por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
+    };
+  }
+
+  if (
+    text === "dinero disponible" ||
+    text === "saldo" ||
+    text === "flujo" ||
+    text === "saldo actual"
+  ) {
+    const cashflow = await getMonthCashflow(waId);
+
+    if (!cashflow) {
+      return {
+        reply: "No pude calcular tu flujo actual.",
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    return {
+      reply: `💰 Flujo actual del mes\n\nIngresos: ${formatAmount(
+        cashflow.income
+      )}€\nGastos: ${formatAmount(cashflow.expenses)}€\nDisponible: ${formatAmount(
+        cashflow.available
+      )}€`,
       parsed: {
         amount: null,
         category: "Otros",
