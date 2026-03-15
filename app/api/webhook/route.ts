@@ -13,10 +13,11 @@ const MONTHLY_PAYMENT_LINK =
 const YEARLY_PAYMENT_LINK =
   "https://buy.stripe.com/test_28E14oeWqgCBbmh1ug7bW01";
 
-type ParsedExpense = {
+type ParsedEntry = {
   amount: number | null;
   category: string;
   description: string;
+  entryType: "income" | "expense";
 };
 
 function normalizeText(message: string) {
@@ -43,6 +44,20 @@ function formatDateShort(dateString: string) {
 
 function normalizePhoneDigits(value: string) {
   return (value || "").replace(/\D/g, "");
+}
+
+function isIncomeText(text: string) {
+  return (
+    text.includes("recibi") ||
+    text.includes("me pagaron") ||
+    text.includes("me ingresaron") ||
+    text.includes("salario") ||
+    text.includes("nomina") ||
+    text.includes("ingreso") ||
+    text.includes("cobre") ||
+    text.includes("cobré") ||
+    text.includes("recibo")
+  );
 }
 
 function getTodayDateRange() {
@@ -124,7 +139,7 @@ function buildSubscriptionPitchMessage() {
     `${MONTHLY_PAYMENT_LINK}`,
     "",
     "🔥 Anual — 50€/año",
-    `Solo 4,16€/mes`,
+    "Solo 4,16€/mes",
     `${YEARLY_PAYMENT_LINK}`,
     "",
     "El plan anual es la mejor opción: pagas mucho menos y mantienes el control todo el año.",
@@ -455,7 +470,7 @@ async function getUsageBasedProjection(waId: string) {
   };
 }
 
-function parseExpenseWithRules(message: string): ParsedExpense {
+function parseEntryWithRules(message: string): ParsedEntry {
   const text = normalizeText(message);
 
   const amountMatch =
@@ -465,68 +480,75 @@ function parseExpenseWithRules(message: string): ParsedExpense {
 
   const amount = amountMatch ? Number(amountMatch[1].replace(",", ".")) : null;
 
-  let category = "Otros";
+  const entryType: "income" | "expense" = isIncomeText(text)
+    ? "income"
+    : "expense";
 
-  if (
-    text.includes("supermercado") ||
-    text.includes("mercado") ||
-    text.includes("mercadona") ||
-    text.includes("lidl") ||
-    text.includes("carrefour") ||
-    text.includes("dia") ||
-    text.includes("cafe") ||
-    text.includes("cafeteria") ||
-    text.includes("restaurante") ||
-    text.includes("comida") ||
-    text.includes("cena") ||
-    text.includes("almuerzo") ||
-    text.includes("desayuno") ||
-    text.includes("merienda")
-  ) {
-    category = "Alimentación";
-  } else if (
-    text.includes("uber") ||
-    text.includes("taxi") ||
-    text.includes("cabify") ||
-    text.includes("bolt") ||
-    text.includes("metro") ||
-    text.includes("tren") ||
-    text.includes("bus") ||
-    text.includes("autobus") ||
-    text.includes("transporte") ||
-    text.includes("gasolina") ||
-    text.includes("parking") ||
-    text.includes("peaje") ||
-    text.includes("aeropuerto")
-  ) {
-    category = "Transporte";
-  } else if (
-    text.includes("cine") ||
-    text.includes("netflix") ||
-    text.includes("spotify") ||
-    text.includes("ocio") ||
-    text.includes("bar") ||
-    text.includes("fiesta") ||
-    text.includes("discoteca") ||
-    text.includes("copas") ||
-    text.includes("cerveza") ||
-    text.includes("vino")
-  ) {
-    category = "Ocio";
-  } else if (
-    text.includes("farmacia") ||
-    text.includes("medico") ||
-    text.includes("medicina") ||
-    text.includes("salud") ||
-    text.includes("hospital")
-  ) {
-    category = "Salud";
+  let category = entryType === "income" ? "Ingreso" : "Otros";
+
+  if (entryType === "expense") {
+    if (
+      text.includes("supermercado") ||
+      text.includes("mercado") ||
+      text.includes("mercadona") ||
+      text.includes("lidl") ||
+      text.includes("carrefour") ||
+      text.includes("dia") ||
+      text.includes("cafe") ||
+      text.includes("cafeteria") ||
+      text.includes("restaurante") ||
+      text.includes("comida") ||
+      text.includes("cena") ||
+      text.includes("almuerzo") ||
+      text.includes("desayuno") ||
+      text.includes("merienda")
+    ) {
+      category = "Alimentación";
+    } else if (
+      text.includes("uber") ||
+      text.includes("taxi") ||
+      text.includes("cabify") ||
+      text.includes("bolt") ||
+      text.includes("metro") ||
+      text.includes("tren") ||
+      text.includes("bus") ||
+      text.includes("autobus") ||
+      text.includes("transporte") ||
+      text.includes("gasolina") ||
+      text.includes("parking") ||
+      text.includes("peaje") ||
+      text.includes("aeropuerto")
+    ) {
+      category = "Transporte";
+    } else if (
+      text.includes("cine") ||
+      text.includes("netflix") ||
+      text.includes("spotify") ||
+      text.includes("ocio") ||
+      text.includes("bar") ||
+      text.includes("fiesta") ||
+      text.includes("discoteca") ||
+      text.includes("copas") ||
+      text.includes("cerveza") ||
+      text.includes("vino")
+    ) {
+      category = "Ocio";
+    } else if (
+      text.includes("farmacia") ||
+      text.includes("medico") ||
+      text.includes("medicina") ||
+      text.includes("salud") ||
+      text.includes("hospital")
+    ) {
+      category = "Salud";
+    }
   }
 
   return {
     amount,
     category,
     description: message.trim(),
+    entryType,
   };
 }
 
@@ -567,10 +589,10 @@ function mergeWithContext(currentMessage: string, previousMessages: string[]) {
   return `${lastRelevant} ${currentMessage}`;
 }
 
-async function parseExpenseWithOpenAI(
+async function parseEntryWithOpenAI(
   message: string,
   contextMessages: string[]
-): Promise<ParsedExpense | null> {
+): Promise<ParsedEntry | null> {
   if (!OPENAI_API_KEY) return null;
 
   const contextBlock = contextMessages.length
@@ -586,19 +608,21 @@ async function parseExpenseWithOpenAI(
       },
       body: JSON.stringify({
         model: "gpt-4.1-mini",
-        input: `Extrae un gasto financiero del mensaje del usuario usando también el contexto reciente si ayuda.
+        input: `Extrae un movimiento financiero del mensaje del usuario usando también el contexto reciente si ayuda.
 
 Devuelve SOLO JSON válido, sin markdown, sin explicación, sin texto extra.
 
 Formato exacto:
 {
   "amount": number | null,
-  "category": "Alimentación" | "Transporte" | "Ocio" | "Salud" | "Otros",
-  "description": string
+  "category": string,
+  "description": string,
+  "entryType": "income" | "expense"
 }
 
 Reglas:
-- Usa el contexto solo si la última frase depende de mensajes anteriores.
+- Si el texto habla de dinero recibido, salario, cobro o ingreso, entryType = "income".
+- Si el texto habla de gasto o compra, entryType = "expense".
 - Si no hay importe claro, amount = null.
 - La descripción debe ser breve y útil.
 - No inventes datos.
@@ -629,11 +653,16 @@ ${message}`,
       amount:
         typeof parsed.amount === "number" ? parsed.amount : null,
       category:
-        typeof parsed.category === "string" ? parsed.category : "Otros",
+        typeof parsed.category === "string"
+          ? parsed.category
+          : parsed.entryType === "income"
+          ? "Ingreso"
+          : "Otros",
       description:
         typeof parsed.description === "string"
           ? parsed.description
           : message.trim(),
+      entryType: parsed.entryType === "income" ? "income" : "expense",
     };
   } catch (error) {
     console.error("OPENAI PARSE ERROR:", error);
@@ -641,12 +670,12 @@ ${message}`,
   }
 }
 
-async function parseExpenseSmart(message: string, waId: string) {
+async function parseEntrySmart(message: string, waId: string) {
   const recentMessagesRows = await getRecentIncomingMessages(waId, 5);
   const recentMessages = recentMessagesRows.map((row) => row.message);
 
   const mergedMessage = mergeWithContext(message, recentMessages);
-  const ruleParsed = parseExpenseWithRules(mergedMessage);
+  const ruleParsed = parseEntryWithRules(mergedMessage);
 
   const shouldUseAI =
     ruleParsed.amount === null ||
@@ -660,7 +689,7 @@ async function parseExpenseSmart(message: string, waId: string) {
   console.log("Using OpenAI fallback for parsing:", message);
   console.log("Merged context message:", mergedMessage);
 
-  const aiParsed = await parseExpenseWithOpenAI(mergedMessage, recentMessages);
+  const aiParsed = await parseEntryWithOpenAI(mergedMessage, recentMessages);
 
   if (aiParsed && aiParsed.amount !== null) {
     console.log("AI PARSED RESULT:", aiParsed);
@@ -786,9 +815,14 @@ async function buildReply(message: string, waId: string) {
   if (text === "hola" || text === "hi" || text === "hello") {
     return {
       reply:
-        "Hola 👋 Soy EuroChat AI.\n\nTe ayudo a controlar tus gastos por WhatsApp.\n\nPuedes escribir:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• gasté 12€ en supermercado\n• pagué 8€ de taxi\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• proyeccion\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos e ingresos por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• proyeccion\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
@@ -808,8 +842,13 @@ async function buildReply(message: string, waId: string) {
         total === null
           ? "No pude calcular tu total de hoy."
           : `Hoy has gastado ${formatAmount(total)}€`,
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
@@ -823,8 +862,13 @@ async function buildReply(message: string, waId: string) {
     if (!todaySummary) {
       return {
         reply: "No pude generar tu resumen de hoy.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -834,8 +878,13 @@ async function buildReply(message: string, waId: string) {
     if (categories.length === 0) {
       return {
         reply: "Hoy todavía no tienes gastos registrados.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -847,8 +896,13 @@ async function buildReply(message: string, waId: string) {
       reply: `📊 Resumen de hoy\n\n${lines.join("\n")}\n\nTotal: ${formatAmount(
         total
       )}€`,
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
@@ -858,8 +912,13 @@ async function buildReply(message: string, waId: string) {
     if (!monthSummary) {
       return {
         reply: "No pude generar tu resumen mensual.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -868,8 +927,13 @@ async function buildReply(message: string, waId: string) {
     if (entries.length === 0) {
       return {
         reply: "Este mes todavía no tienes gastos registrados.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -881,8 +945,13 @@ async function buildReply(message: string, waId: string) {
       reply: `📊 Resumen del mes\n\n${lines.join("\n")}\n\nTotal: ${formatAmount(
         monthSummary.total
       )}€`,
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
@@ -896,8 +965,13 @@ async function buildReply(message: string, waId: string) {
     if (!monthSummary) {
       return {
         reply: "No pude calcular tu ranking este mes.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -906,8 +980,13 @@ async function buildReply(message: string, waId: string) {
     if (!ranking) {
       return {
         reply: "Este mes todavía no tienes gastos registrados.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -915,8 +994,13 @@ async function buildReply(message: string, waId: string) {
       reply: `📊 Tu ranking de gastos este mes\n\n${ranking}\n\nTotal: ${formatAmount(
         monthSummary.total
       )}€`,
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
@@ -926,8 +1010,13 @@ async function buildReply(message: string, waId: string) {
     if (!projectionData || projectionData.daysOfUse === 0) {
       return {
         reply: "Todavía no tienes suficientes gastos este mes para proyectar.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -938,8 +1027,13 @@ async function buildReply(message: string, waId: string) {
         )}€.\nSi sigues así, podrías gastar ${formatAmount(
           projectionData.projection
         )}€ hasta el fin del mes.`,
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -960,8 +1054,13 @@ async function buildReply(message: string, waId: string) {
             )}€.`
           : ""
       }`,
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
@@ -971,8 +1070,13 @@ async function buildReply(message: string, waId: string) {
     if (!expenses || expenses.length === 0) {
       return {
         reply: "Todavía no tienes gastos registrados.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -985,8 +1089,13 @@ async function buildReply(message: string, waId: string) {
 
     return {
       reply: `🧾 Últimos gastos\n\n${lines.join("\n\n")}`,
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
@@ -996,16 +1105,26 @@ async function buildReply(message: string, waId: string) {
     if (deleted === null) {
       return {
         reply: "No pude borrar tu último gasto.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
     if (deleted === false) {
       return {
         reply: "No tienes gastos para borrar.",
-        parsed: { amount: null, category: "Otros", description: message.trim() },
-        shouldSaveExpense: false,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
       };
     }
 
@@ -1013,19 +1132,34 @@ async function buildReply(message: string, waId: string) {
       reply: `🗑️ Último gasto borrado\n\n${deleted.description} — ${formatAmount(
         Number(deleted.amount)
       )}€ (${deleted.category})`,
-      parsed: { amount: null, category: "Otros", description: message.trim() },
-      shouldSaveExpense: false,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
     };
   }
 
-  const parsed = await parseExpenseSmart(message, waId);
+  const parsed = await parseEntrySmart(message, waId);
 
   if (parsed.amount === null) {
     return {
       reply:
-        "No entendí el gasto.\n\nPrueba algo como:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• gasté 12€ en supermercado\n• pagué 8€ de taxi",
+        "No entendí el movimiento.\n\nPrueba algo como:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€",
       parsed,
-      shouldSaveExpense: false,
+      shouldSaveEntry: false,
+    };
+  }
+
+  if (parsed.entryType === "income") {
+    return {
+      reply: `💰 Ingreso registrado\nConcepto: ${parsed.description}\nImporte: ${formatAmount(
+        parsed.amount
+      )}€`,
+      parsed,
+      shouldSaveEntry: true,
     };
   }
 
@@ -1034,7 +1168,7 @@ async function buildReply(message: string, waId: string) {
       parsed.amount
     )}€`,
     parsed,
-    shouldSaveExpense: true,
+    shouldSaveEntry: true,
   };
 }
 
@@ -1092,27 +1226,42 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ received: true }, { status: 200 });
     }
 
-    const { reply, parsed, shouldSaveExpense } = await buildReply(text, from);
+    const { reply, parsed, shouldSaveEntry } = await buildReply(text, from);
 
     console.log("PARSED:", parsed);
     console.log("REPLY:", reply);
 
     let finalReply = reply;
 
-    if (shouldSaveExpense && parsed.amount !== null) {
-      const { error } = await supabase.from("expenses").insert({
+    if (shouldSaveEntry && parsed.amount !== null) {
+      const cashflowInsert = await supabase.from("cashflow_entries").insert({
         wa_id: from,
+        type: parsed.entryType,
         amount: parsed.amount,
         category: parsed.category,
         description: parsed.description,
         source: "whatsapp",
       });
 
-      if (error) {
-        console.error("SUPABASE INSERT ERROR:", error);
-      } else {
-        console.log("Expense saved successfully.");
-        finalReply += await buildDailyControlMessage(from);
+      if (cashflowInsert.error) {
+        console.error("CASHFLOW INSERT ERROR:", cashflowInsert.error);
+      }
+
+      if (parsed.entryType === "expense") {
+        const expenseInsert = await supabase.from("expenses").insert({
+          wa_id: from,
+          amount: parsed.amount,
+          category: parsed.category,
+          description: parsed.description,
+          source: "whatsapp",
+        });
+
+        if (expenseInsert.error) {
+          console.error("SUPABASE INSERT ERROR:", expenseInsert.error);
+        } else {
+          console.log("Expense saved successfully.");
+          finalReply += await buildDailyControlMessage(from);
+        }
       }
     }
 
