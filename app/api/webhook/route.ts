@@ -184,6 +184,7 @@ function buildSubscriptionPitchMessage() {
     "• proyección del mes",
     "• ranking de categorías",
     "• consejos y reportes automáticos",
+    "• gestión de cuentas fijas",
     "",
     "💳 Elige tu plan:",
     "",
@@ -422,6 +423,22 @@ async function getLastExpenses(waId: string, limit = 5) {
 
   if (error) {
     console.error("SUPABASE LAST EXPENSES ERROR:", error);
+    return null;
+  }
+
+  return data || [];
+}
+
+async function getBills(waId: string) {
+  const { data, error } = await supabase
+    .from("bills")
+    .select("title, amount, due_day, is_active")
+    .eq("wa_id", waId)
+    .eq("is_active", true)
+    .order("due_day", { ascending: true });
+
+  if (error) {
+    console.error("GET BILLS ERROR:", error);
     return null;
   }
 
@@ -695,6 +712,7 @@ function mergeWithContext(currentMessage: string, previousMessages: string[]) {
     if (normalized.includes("saldo")) return false;
     if (normalized.includes("dinero disponible")) return false;
     if (normalized.includes("flujo")) return false;
+    if (normalized.includes("cuentas")) return false;
 
     return true;
   });
@@ -967,10 +985,63 @@ async function buildReply(message: string, waId: string) {
     };
   }
 
+  if (
+    text === "mis cuentas" ||
+    text === "cuentas" ||
+    text === "ver cuentas"
+  ) {
+    const bills = await getBills(waId);
+
+    if (!bills) {
+      return {
+        reply: "No pude cargar tus cuentas fijas.",
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    if (bills.length === 0) {
+      return {
+        reply:
+          "Todavía no tienes cuentas fijas registradas.\n\nPrueba algo como:\n• alquiler 650€ día 5\n• internet 30€ día 12",
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    const lines = bills.map(
+      (item) =>
+        `• ${item.title} — ${
+          item.amount !== null ? `${formatAmount(Number(item.amount))}€` : "sin importe"
+        } — día ${item.due_day}`
+    );
+
+    return {
+      reply: `📌 Tus cuentas fijas\n\n${lines.join("\n")}`,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
+    };
+  }
+
   if (text === "hola" || text === "hi" || text === "hello") {
     return {
       reply:
-        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos, ingresos y cuentas fijas por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• recibí 1800€\n• alquiler 650€ día 5\n• internet 30€ día 12\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos, ingresos y cuentas fijas por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• recibí 1800€\n• alquiler 650€ día 5\n• internet 30€ día 12\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• mis cuentas\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
       parsed: {
         amount: null,
         category: "Otros",
