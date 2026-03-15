@@ -111,6 +111,20 @@ function parseBillRegistration(message: string): ParsedBill | null {
   };
 }
 
+function extractBillDeleteTitle(message: string) {
+  const text = message.trim();
+  const normalized = normalizeText(text);
+
+  if (
+    normalized.startsWith("borrar cuenta ") ||
+    normalized.startsWith("eliminar cuenta ")
+  ) {
+    return text.replace(/^(borrar|eliminar)\s+cuenta\s+/i, "").trim();
+  }
+
+  return null;
+}
+
 function getTodayDateRange() {
   const now = new Date();
 
@@ -432,7 +446,7 @@ async function getLastExpenses(waId: string, limit = 5) {
 async function getBills(waId: string) {
   const { data, error } = await supabase
     .from("bills")
-    .select("title, amount, due_day, is_active")
+    .select("id, title, amount, due_day, is_active")
     .eq("wa_id", waId)
     .eq("is_active", true)
     .order("due_day", { ascending: true });
@@ -443,6 +457,36 @@ async function getBills(waId: string) {
   }
 
   return data || [];
+}
+
+async function deactivateBillByTitle(waId: string, title: string) {
+  const normalizedTarget = normalizeText(title);
+
+  const bills = await getBills(waId);
+  if (!bills || bills.length === 0) return { ok: false as const, reason: "not_found" };
+
+  const matched = bills.find(
+    (bill) => normalizeText(bill.title) === normalizedTarget
+  );
+
+  if (!matched) {
+    return { ok: false as const, reason: "not_found" };
+  }
+
+  const { error } = await supabase
+    .from("bills")
+    .update({
+      is_active: false,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", matched.id);
+
+  if (error) {
+    console.error("DEACTIVATE BILL ERROR:", error);
+    return { ok: false as const, reason: "error" };
+  }
+
+  return { ok: true as const, title: matched.title };
 }
 
 async function deleteLastExpense(waId: string) {
@@ -945,6 +989,36 @@ async function sendWhatsAppText(to: string, body: string) {
 async function buildReply(message: string, waId: string) {
   const text = normalizeText(message);
 
+  const deleteBillTitle = extractBillDeleteTitle(message);
+  if (deleteBillTitle) {
+    const result = await deactivateBillByTitle(waId, deleteBillTitle);
+
+    if (result.ok) {
+      return {
+        reply: `🗑️ Cuenta desactivada\n\n${result.title} ya no volverá a recordarse.`,
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    return {
+      reply:
+        "No encontré esa cuenta fija.\n\nPrueba algo como:\n• borrar cuenta alquiler\n• eliminar cuenta internet",
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
+    };
+  }
+
   const bill = parseBillRegistration(message);
   if (bill && bill.dueDay) {
     const { error } = await supabase.from("bills").insert({
@@ -1041,7 +1115,7 @@ async function buildReply(message: string, waId: string) {
   if (text === "hola" || text === "hi" || text === "hello") {
     return {
       reply:
-        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos, ingresos y cuentas fijas por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• recibí 1800€\n• alquiler 650€ día 5\n• internet 30€ día 12\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• mis cuentas\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos, ingresos y cuentas fijas por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• recibí 1800€\n• alquiler 650€ día 5\n• internet 30€ día 12\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• mis cuentas\n• borrar cuenta alquiler\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
       parsed: {
         amount: null,
         category: "Otros",
