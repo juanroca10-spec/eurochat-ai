@@ -340,6 +340,27 @@ async function getMonthCashflow(waId: string) {
   };
 }
 
+async function getRealisticProjection(waId: string) {
+  const cashflow = await getMonthCashflow(waId);
+  const expenseProjection = await getUsageBasedProjection(waId);
+
+  if (!cashflow || !expenseProjection) {
+    return null;
+  }
+
+  const projectedRemainingExpenses = expenseProjection.projection;
+  const estimatedEndBalance = cashflow.available - projectedRemainingExpenses;
+
+  return {
+    income: cashflow.income,
+    currentExpenses: cashflow.expenses,
+    availableToday: cashflow.available,
+    projectedRemainingExpenses,
+    estimatedEndBalance,
+    daysOfUse: expenseProjection.daysOfUse,
+  };
+}
+
 async function getLastExpenses(waId: string, limit = 5) {
   const { data, error } = await supabase
     .from("expenses")
@@ -622,6 +643,7 @@ function mergeWithContext(currentMessage: string, previousMessages: string[]) {
     if (normalized.includes("ranking")) return false;
     if (normalized.includes("saldo")) return false;
     if (normalized.includes("dinero disponible")) return false;
+    if (normalized.includes("flujo")) return false;
 
     return true;
   });
@@ -831,7 +853,7 @@ async function sendWhatsAppText(to: string, body: string) {
 
   const response = await fetch(
     `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
-      {
+    {
       method: "POST",
       headers: {
         Authorization: `Bearer ${WHATSAPP_TOKEN}`,
@@ -857,7 +879,7 @@ async function buildReply(message: string, waId: string) {
   if (text === "hola" || text === "hi" || text === "hello") {
     return {
       reply:
-        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos e ingresos por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos e ingresos por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
       parsed: {
         amount: null,
         category: "Otros",
@@ -894,6 +916,48 @@ async function buildReply(message: string, waId: string) {
         cashflow.income
       )}€\nGastos: ${formatAmount(cashflow.expenses)}€\nDisponible: ${formatAmount(
         cashflow.available
+      )}€`,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
+    };
+  }
+
+  if (
+    text === "saldo estimado" ||
+    text === "fin de mes" ||
+    text === "saldo fin de mes"
+  ) {
+    const realisticProjection = await getRealisticProjection(waId);
+
+    if (!realisticProjection) {
+      return {
+        reply: "No pude calcular tu saldo estimado a fin de mes.",
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    return {
+      reply: `📈 Proyección financiera\n\nIngresos del mes: ${formatAmount(
+        realisticProjection.income
+      )}€\nGastos actuales: ${formatAmount(
+        realisticProjection.currentExpenses
+      )}€\nDisponible hoy: ${formatAmount(
+        realisticProjection.availableToday
+      )}€\n\nGasto estimado hasta fin de mes: ${formatAmount(
+        realisticProjection.projectedRemainingExpenses
+      )}€\nSaldo estimado a fin de mes: ${formatAmount(
+        realisticProjection.estimatedEndBalance
       )}€`,
       parsed: {
         amount: null,
@@ -1084,28 +1148,12 @@ async function buildReply(message: string, waId: string) {
   }
 
   if (text === "proyeccion" || text === "proyeccion mes") {
-    const projectionData = await getUsageBasedProjection(waId);
+    const realisticProjection = await getRealisticProjection(waId);
+    const expenseProjection = await getUsageBasedProjection(waId);
 
-    if (!projectionData || projectionData.daysOfUse === 0) {
+    if (!realisticProjection || !expenseProjection) {
       return {
-        reply: "Todavía no tienes suficientes gastos este mes para proyectar.",
-        parsed: {
-          amount: null,
-          category: "Otros",
-          description: message.trim(),
-          entryType: "expense",
-        },
-        shouldSaveEntry: false,
-      };
-    }
-
-    if (projectionData.daysOfUse === 1) {
-      return {
-        reply: `📈 Proyección inicial\n\nHoy has gastado ${formatAmount(
-          projectionData.totalToday
-        )}€.\nSi sigues así, podrías gastar ${formatAmount(
-          projectionData.projection
-        )}€ hasta el fin del mes.`,
+        reply: "Todavía no tienes suficientes datos este mes para proyectar.",
         parsed: {
           amount: null,
           category: "Otros",
@@ -1122,11 +1170,17 @@ async function buildReply(message: string, waId: string) {
       : null;
 
     return {
-      reply: `📈 Proyección del mes\n\nTu media diaria desde que empezaste es ${formatAmount(
-        projectionData.totalSinceStart / projectionData.daysOfUse
-      )}€.\nSi sigues así, podrías gastar ${formatAmount(
-        projectionData.projection
-      )}€ hasta el fin del mes.${
+      reply: `📈 Proyección del mes\n\nIngresos del mes: ${formatAmount(
+        realisticProjection.income
+      )}€\nGastos actuales: ${formatAmount(
+        realisticProjection.currentExpenses
+      )}€\nDisponible hoy: ${formatAmount(
+        realisticProjection.availableToday
+      )}€\n\nGasto estimado hasta fin de mes: ${formatAmount(
+        realisticProjection.projectedRemainingExpenses
+      )}€\nSaldo estimado a fin de mes: ${formatAmount(
+        realisticProjection.estimatedEndBalance
+      )}€${
         topCategory
           ? `\n\nTu categoría principal es ${topCategory.category} con ${formatAmount(
               topCategory.amount
