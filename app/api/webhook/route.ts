@@ -20,6 +20,12 @@ type ParsedEntry = {
   entryType: "income" | "expense";
 };
 
+type ParsedBill = {
+  title: string;
+  amount: number | null;
+  dueDay: number | null;
+};
+
 function normalizeText(message: string) {
   return message
     .trim()
@@ -58,6 +64,51 @@ function isIncomeText(text: string) {
     text.includes("cobré") ||
     text.includes("recibo")
   );
+}
+
+function parseBillRegistration(message: string): ParsedBill | null {
+  const text = normalizeText(message);
+
+  const dueDayMatch =
+    text.match(/\bdia\s+(\d{1,2})\b/) ||
+    text.match(/\bdía\s+(\d{1,2})\b/) ||
+    text.match(/\bvenc(e|e el)?\s+(\d{1,2})\b/);
+
+  let dueDay: number | null = null;
+
+  if (dueDayMatch) {
+    const rawDay = dueDayMatch[dueDayMatch.length - 1];
+    dueDay = Number(rawDay);
+    if (Number.isNaN(dueDay) || dueDay < 1 || dueDay > 31) {
+      dueDay = null;
+    }
+  }
+
+  const amountMatch =
+    text.match(/(\d+[.,]?\d*)\s*€/) ||
+    text.match(/€\s*(\d+[.,]?\d*)/) ||
+    text.match(/(\d+[.,]?\d*)/);
+
+  const amount = amountMatch ? Number(amountMatch[1].replace(",", ".")) : null;
+
+  if (!dueDay) return null;
+
+  let title = message.trim();
+
+  title = title.replace(/(\d+[.,]?\d*)\s*€/gi, "");
+  title = title.replace(/€\s*(\d+[.,]?\d*)/gi, "");
+  title = title.replace(/\bd[ií]a\s+\d{1,2}\b/gi, "");
+  title = title.replace(/\bvence\b/gi, "");
+  title = title.replace(/\bel\b/gi, "");
+  title = title.replace(/\s+/g, " ").trim();
+
+  if (!title) title = "Cuenta";
+
+  return {
+    title,
+    amount,
+    dueDay,
+  };
 }
 
 function getTodayDateRange() {
@@ -876,10 +927,50 @@ async function sendWhatsAppText(to: string, body: string) {
 async function buildReply(message: string, waId: string) {
   const text = normalizeText(message);
 
+  const bill = parseBillRegistration(message);
+  if (bill && bill.dueDay) {
+    const { error } = await supabase.from("bills").insert({
+      wa_id: waId,
+      title: bill.title,
+      amount: bill.amount,
+      due_day: bill.dueDay,
+      frequency: "monthly",
+      category: "Fijos",
+      is_active: true,
+    });
+
+    if (error) {
+      console.error("BILL INSERT ERROR:", error);
+      return {
+        reply: "No pude guardar esa cuenta fija.",
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    return {
+      reply: `📌 Cuenta registrada\n\nConcepto: ${bill.title}\nImporte: ${
+        bill.amount !== null ? `${formatAmount(bill.amount)}€` : "sin importe"
+      }\nVence cada mes el día ${bill.dueDay}.`,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
+    };
+  }
+
   if (text === "hola" || text === "hi" || text === "hello") {
     return {
       reply:
-        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos e ingresos por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+        "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos, ingresos y cuentas fijas por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• recibí 1800€\n• alquiler 650€ día 5\n• internet 30€ día 12\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
       parsed: {
         amount: null,
         category: "Otros",
@@ -1280,7 +1371,7 @@ async function buildReply(message: string, waId: string) {
   if (parsed.amount === null) {
     return {
       reply:
-        "No entendí el movimiento.\n\nPrueba algo como:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€",
+        "No entendí el movimiento.\n\nPrueba algo como:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n• recibí 1800€\n• salario 2200€\n• me pagaron 950€\n• alquiler 650€ día 5",
       parsed,
       shouldSaveEntry: false,
     };
