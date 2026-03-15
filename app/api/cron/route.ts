@@ -18,12 +18,18 @@ type UserRow = {
   name?: string | null;
 };
 
+type BillRow = {
+  title: string;
+  amount: number | string | null;
+  due_day: number;
+};
+
 const TIPS = [
   "💡 Consejo 1/5\n\nRegistra tus gastos tal como hablas:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n\nCuanto más natural escribas, más fácil será usar EuroChat.",
   "💡 Consejo 2/5\n\nUsa “resumen hoy” cada noche para ver en qué se fue tu dinero durante el día.",
   "💡 Consejo 3/5\n\nUsa “ranking” para descubrir tu categoría más fuerte del mes.\n\nVer tu top de gasto ayuda muchísimo a corregir hábitos.",
   "💡 Consejo 4/5\n\nUsa “proyeccion” para saber si tu ritmo actual te puede llevar a pasarte antes de fin de mes.",
-  "💡 Consejo 5/5\n\nSi te equivocas, escribe “borrar ultimo gasto”.\n\nAsí mantienes tu historial limpio sin complicarte."
+  "💡 Consejo 5/5\n\nSi te equivocas, escribe “borrar ultimo gasto”.\n\nAsí mantienes tu historial limpio sin complicarte.",
 ];
 
 const WEEKLY_TIPS = [
@@ -31,7 +37,7 @@ const WEEKLY_TIPS = [
   "💡 Consejo semanal\n\nAntes de dormir, prueba “resumen hoy”. Ver tu día cerrado te ayuda a no gastar en automático.",
   "💡 Consejo semanal\n\nSi un gasto fue impulsivo, anótalo igual. Registrar también lo incómodo es lo que más cambia hábitos.",
   "💡 Consejo semanal\n\nLa mejor forma de usar EuroChat es registrar en el momento, no al final del día. Eso reduce olvidos y mejora la proyección.",
-  "💡 Consejo semanal\n\nNo intentes ser perfecto: intenta ser constante. Un registro simple cada día vale más que un control perfecto una vez al mes."
+  "💡 Consejo semanal\n\nNo intentes ser perfecto: intenta ser constante. Un registro simple cada día vale más que un control perfecto una vez al mes.",
 ];
 
 function formatAmount(value: number) {
@@ -58,7 +64,7 @@ function getMadridParts(date = new Date()) {
     day: Number(map.day),
     hour: Number(map.hour),
     minute: Number(map.minute),
-    weekday: map.weekday, // Mon, Tue, Wed, Thu, Fri, Sat, Sun
+    weekday: map.weekday,
   };
 }
 
@@ -190,6 +196,23 @@ async function getExpensesInRange(waId: string, startDate: string, endDate: stri
   return (data || []) as ExpenseRow[];
 }
 
+async function getBillsDueToday(waId: string, todayDay: number) {
+  const { data, error } = await supabase
+    .from("bills")
+    .select("title, amount, due_day")
+    .eq("wa_id", waId)
+    .eq("is_active", true)
+    .eq("due_day", todayDay)
+    .order("title", { ascending: true });
+
+  if (error) {
+    console.error("GET BILLS DUE TODAY ERROR:", waId, error);
+    return [];
+  }
+
+  return (data || []) as BillRow[];
+}
+
 async function getFirstUseDateYmd(waId: string) {
   const { data, error } = await supabase
     .from("messages")
@@ -288,7 +311,7 @@ async function sendWhatsAppText(to: string, body: string) {
 async function saveOutgoingMessage(
   waId: string,
   message: string,
-  messageType: "report" | "tip"
+  messageType: "report" | "tip" | "bill_reminder"
 ) {
   const { error } = await supabase.from("messages").insert({
     wa_id: waId,
@@ -450,7 +473,6 @@ async function buildMonthlyReport(waId: string, monthEndYmd: string) {
 }
 
 async function buildTipMessageForUser(waId: string, todayYmd: string, weekday: string) {
-  // Only Mon-Fri
   if (!["Mon", "Tue", "Wed", "Thu", "Fri"].includes(weekday)) {
     return null;
   }
@@ -460,7 +482,6 @@ async function buildTipMessageForUser(waId: string, todayYmd: string, weekday: s
 
   const daysSinceFirstUse = diffDaysInclusive(firstUseYmd, todayYmd);
 
-  // Onboarding tips: first week only, starting from 2nd day of use
   if (daysSinceFirstUse >= 2 && daysSinceFirstUse <= 7) {
     const onboardingSent = await countDeliveries(waId, "tip_onboarding");
 
@@ -481,7 +502,6 @@ async function buildTipMessageForUser(waId: string, todayYmd: string, weekday: s
     return null;
   }
 
-  // After first week: weekly tip every Friday
   if (daysSinceFirstUse > 7 && weekday === "Fri") {
     const weekKey = getIsoWeekKey(todayYmd);
     const reportKey = `weekly_tip_${weekKey}`;
@@ -500,6 +520,56 @@ async function buildTipMessageForUser(waId: string, todayYmd: string, weekday: s
   }
 
   return null;
+}
+
+function buildBillsReminderMessage(bills: BillRow[]) {
+  const lines = bills.map(
+    (bill) =>
+      `• ${bill.title} — ${
+        bill.amount !== null ? `${formatAmount(Number(bill.amount))}€` : "sin importe"
+      }`
+  );
+
+  return `🔔 Recordatorio de pago\n\nHoy vencen estas cuentas:\n\n${lines.join(
+    "\n"
+  )}\n\nEvita olvidos y mantén tu control al día.`;
+}
+
+async function runBillsJob(todayYmd: string) {
+  const users = await getAllUsers();
+  const todayDay = Number(todayYmd.slice(-2));
+  let remindersSent = 0;
+
+  for (const user of users) {
+    const bills = await getBillsDueToday(user.wa_id, todayDay);
+    if (!bills.length) continue;
+
+    const reportKey = `${todayYmd}_day_${todayDay}`;
+    const alreadySent = await hasDelivery(
+      user.wa_id,
+      "bill_reminder",
+      reportKey
+    );
+
+    if (alreadySent) continue;
+
+    const message = buildBillsReminderMessage(bills);
+    const sent = await sendWhatsAppText(user.wa_id, message);
+
+    if (sent) {
+      await saveOutgoingMessage(user.wa_id, message, "bill_reminder");
+      await markDelivery(user.wa_id, "bill_reminder", reportKey);
+      remindersSent++;
+    }
+  }
+
+  return {
+    ok: true,
+    job: "bills",
+    users: users.length,
+    remindersSent,
+    todayYmd,
+  };
 }
 
 async function runTipsJob(todayYmd: string, weekday: string) {
@@ -627,9 +697,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(result);
   }
 
+  if (job === "bills") {
+    const result = await runBillsJob(todayYmd);
+    return NextResponse.json(result);
+  }
+
   return NextResponse.json(
     {
-      error: "Missing or invalid job param. Use ?job=tips or ?job=reports",
+      error: "Missing or invalid job param. Use ?job=tips or ?job=reports or ?job=bills",
     },
     { status: 400 }
   );
