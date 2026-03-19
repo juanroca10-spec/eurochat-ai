@@ -25,11 +25,11 @@ type BillRow = {
 };
 
 const TIPS = [
-  "💡 Consejo 1/5\n\nRegistra tus gastos tal como hablas:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n\nCuanto más natural escribas, más fácil será usar EuroChat.",
-  "💡 Consejo 2/5\n\nUsa “resumen hoy” cada noche para ver en qué se fue tu dinero durante el día.",
-  "💡 Consejo 3/5\n\nUsa “ranking” para descubrir tu categoría más fuerte del mes.\n\nVer tu top de gasto ayuda muchísimo a corregir hábitos.",
-  "💡 Consejo 4/5\n\nUsa “proyeccion” para saber si tu ritmo actual te puede llevar a pasarte antes de fin de mes.",
-  "💡 Consejo 5/5\n\nSi te equivocas, escribe “borrar ultimo gasto”.\n\nAsí mantienes tu historial limpio sin complicarte.",
+  "💡 Consejo de Hoy\n\nRegistra tus gastos tal como hablas:\n• supermercado 12€\n• taxi 8€\n• café 3,50\n\nCuanto más natural escribas, más fácil será usar EuroChat.",
+  "💡 Consejo de Hoy\n\nUsa “resumen hoy” cada noche para ver en qué se fue tu dinero durante el día.",
+  "💡 Consejo de Hoy\n\nUsa “ranking” para descubrir tu categoría más fuerte del mes.\n\nVer tu top de gasto ayuda muchísimo a corregir hábitos.",
+  "💡 Consejo de Hoy\n\nUsa “proyeccion” para saber si tu ritmo actual te puede llevar a pasarte antes de fin de mes.",
+  "💡 Consejo de Hoy\n\nSi te equivocas, escribe “borrar ultimo gasto”.\n\nAsí mantienes tu historial limpio sin complicarte.",
 ];
 
 const WEEKLY_TIPS = [
@@ -381,15 +381,11 @@ async function buildDailyReport(waId: string, todayYmd: string) {
     .map(([category, amount]) => `• ${category}: ${formatAmount(amount)}€`)
     .join("\n");
 
-  if (!rows.length) {
-    return `📊 Resumen de hoy\n\nHoy no registraste gastos.\n\n📈 Proyección\nPor ahora no hay suficiente actividad para proyectar el fin del mes.`;
-  }
-
   let projectionText =
     "Por ahora no hay suficiente actividad para proyectar el fin del mes.";
 
   if (projection.daysOfUse === 1) {
-    projectionText = `Como hoy fue tu primer día de uso este mes, si sigues así podrías gastar ${formatAmount(
+    projectionText = `Como este fue tu primer día de uso este mes, si sigues así podrías gastar ${formatAmount(
       projection.projection
     )}€ hasta el fin del mes.`;
   } else if (projection.daysOfUse > 1) {
@@ -399,6 +395,10 @@ async function buildDailyReport(waId: string, todayYmd: string) {
     )}€.\nSi sigues así, podrías gastar ${formatAmount(
       projection.projection
     )}€ hasta el fin del mes.`;
+  }
+
+  if (!rows.length) {
+    return `📊 Resumen de hoy\n\nHoy no registraste gastos.\n\n📈 Proyección\n${projectionText}`;
   }
 
   return `📊 Resumen de hoy\n\n${categoryLines}\n\nTotal: ${formatAmount(
