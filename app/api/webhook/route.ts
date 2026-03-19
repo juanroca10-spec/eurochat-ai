@@ -603,6 +603,23 @@ function buildCategoryRanking(summary: Record<string, number>) {
   return lines.join("\n");
 }
 
+function buildPendingBillsLines(
+  bills: Array<{ title: string; amount: number | string | null }>
+) {
+  if (!bills || bills.length === 0) return "";
+
+  return bills
+    .map(
+      (bill) =>
+        `• ${bill.title} — ${
+          bill.amount !== null
+            ? `${formatAmount(Number(bill.amount))}€`
+            : "sin importe"
+        }`
+    )
+    .join("\n");
+}
+
 async function getUsageBasedProjection(waId: string) {
   const now = new Date();
 
@@ -1138,18 +1155,25 @@ async function buildReply(message: string, waId: string) {
 
   return {
     reply: `📈 Proyección financiera\n\nIngresos del mes: ${formatAmount(
-      realisticProjection.income
-    )}€\nGastos actuales: ${formatAmount(
-      realisticProjection.currentExpenses
-    )}€\nDisponible hoy: ${formatAmount(
-      realisticProjection.availableToday
-    )}€\n\nGasto variable estimado hasta fin de mes: ${formatAmount(
-      realisticProjection.projectedVariableExpenses
-    )}€\nCuentas fijas pendientes: ${formatAmount(
-      realisticProjection.pendingFixedBills
-    )}€\nSaldo estimado a fin de mes: ${formatAmount(
-      realisticProjection.estimatedEndBalance
-    )}€`,
+  realisticProjection.income
+)}€\nGastos actuales: ${formatAmount(
+  realisticProjection.currentExpenses
+)}€\nDisponible hoy: ${formatAmount(
+  realisticProjection.availableToday
+)}€\n\nGasto variable estimado hasta fin de mes: ${formatAmount(
+  realisticProjection.projectedVariableExpenses
+)}€\nCuentas fijas pendientes: ${formatAmount(
+  realisticProjection.pendingFixedBills
+)}€\nSaldo estimado a fin de mes: ${formatAmount(
+  realisticProjection.estimatedEndBalance
+)}€${
+  realisticProjection.pendingBillsList &&
+  realisticProjection.pendingBillsList.length > 0
+    ? `\n\nIncluye:\n${buildPendingBillsLines(
+        realisticProjection.pendingBillsList
+      )}`
+    : ""
+}`,
     parsed: {
       amount: null,
       category: "Otros",
@@ -1454,24 +1478,31 @@ async function buildReply(message: string, waId: string) {
 
   return {
     reply: `📈 Proyección del mes\n\nIngresos del mes: ${formatAmount(
-      realisticProjection.income
-    )}€\nGastos actuales: ${formatAmount(
-      realisticProjection.currentExpenses
-    )}€\nDisponible hoy: ${formatAmount(
-      realisticProjection.availableToday
-    )}€\n\nGasto variable estimado hasta fin de mes: ${formatAmount(
-      realisticProjection.projectedVariableExpenses
-    )}€\nCuentas fijas pendientes: ${formatAmount(
-      realisticProjection.pendingFixedBills
-    )}€\nSaldo estimado a fin de mes: ${formatAmount(
-      realisticProjection.estimatedEndBalance
-    )}€${
-      topCategory
-        ? `\n\nTu categoría principal es ${topCategory.category} con ${formatAmount(
-            topCategory.amount
-          )}€.`
-        : ""
-    }`,
+  realisticProjection.income
+)}€\nGastos actuales: ${formatAmount(
+  realisticProjection.currentExpenses
+)}€\nDisponible hoy: ${formatAmount(
+  realisticProjection.availableToday
+)}€\n\nGasto variable estimado hasta fin de mes: ${formatAmount(
+  realisticProjection.projectedVariableExpenses
+)}€\nCuentas fijas pendientes: ${formatAmount(
+  realisticProjection.pendingFixedBills
+)}€\nSaldo estimado a fin de mes: ${formatAmount(
+  realisticProjection.estimatedEndBalance
+)}€${
+  topCategory
+    ? `\n\nTu categoría principal es ${topCategory.category} con ${formatAmount(
+        topCategory.amount
+      )}€.`
+    : ""
+}${
+  realisticProjection.pendingBillsList &&
+  realisticProjection.pendingBillsList.length > 0
+    ? `\n\nIncluye:\n${buildPendingBillsLines(
+        realisticProjection.pendingBillsList
+      )}`
+    : ""
+}`,
     parsed: {
       amount: null,
       category: "Otros",
