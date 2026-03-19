@@ -213,6 +213,21 @@ async function hasActiveSubscription(waId: string) {
   return end > now;
 }
 
+async function getOpeningBalance(waId: string) {
+  const { data, error } = await supabase
+    .from("user_settings")
+    .select("opening_balance")
+    .eq("wa_id", waId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("GET OPENING BALANCE ERROR:", error);
+    return null;
+  }
+
+  return Number(data?.opening_balance || 0);
+}
+
 function buildSubscriptionPitchMessage() {
   return [
     "🚀 EuroChat AI",
@@ -478,6 +493,58 @@ async function getRealisticProjection(waId: string) {
     estimatedEndBalance,
     pendingBillsList: pendingBills.bills,
     daysOfUse: expenseProjection.daysOfUse,
+  };
+}
+
+async function getRealAvailableBalance(waId: string) {
+  const openingBalance = await getOpeningBalance(waId);
+  const cashflow = await getMonthCashflow(waId);
+
+  if (openingBalance === null || !cashflow) {
+    return null;
+  }
+
+  const realAvailable =
+    openingBalance + cashflow.income - cashflow.expenses;
+
+  return {
+    openingBalance,
+    income: cashflow.income,
+    expenses: cashflow.expenses,
+    realAvailable,
+  };
+}
+
+async function getRealEndOfMonthBalance(waId: string) {
+  const openingBalance = await getOpeningBalance(waId);
+  const cashflow = await getMonthCashflow(waId);
+  const realisticProjection = await getRealisticProjection(waId);
+
+  if (
+    openingBalance === null ||
+    !cashflow ||
+    !realisticProjection
+  ) {
+    return null;
+  }
+
+  const realAvailableToday =
+    openingBalance + cashflow.income - cashflow.expenses;
+
+  const realEstimatedEndBalance =
+    realAvailableToday -
+    realisticProjection.projectedVariableExpenses -
+    realisticProjection.pendingFixedBills;
+
+  return {
+    openingBalance,
+    income: cashflow.income,
+    currentExpenses: cashflow.expenses,
+    realAvailableToday,
+    projectedVariableExpenses: realisticProjection.projectedVariableExpenses,
+    pendingFixedBills: realisticProjection.pendingFixedBills,
+    pendingBillsList: realisticProjection.pendingBillsList,
+    realEstimatedEndBalance,
   };
 }
 
@@ -1230,6 +1297,99 @@ async function buildReply(message: string, waId: string) {
     return {
       reply:
         "Hola 👋 Soy EuroChat AI.\n\nAhora puedes registrar gastos, ingresos y cuentas fijas por WhatsApp.\n\nEjemplos:\n• supermercado 12€\n• taxi 8€\n• recibí 1800€\n• alquiler 650€ día 5\n• internet 30€ día 12\n\nTambién puedes pedir:\n• total hoy\n• resumen hoy\n• resumen mes\n• dinero disponible\n• saldo\n• flujo\n• proyeccion\n• saldo estimado\n• mis cuentas\n• borrar cuenta alquiler\n• ranking\n• ultimos gastos\n• borrar ultimo gasto",
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
+    };
+  }
+
+  if (
+    text === "dinero real disponible" ||
+    text === "saldo real" ||
+    text === "dinero disponible real"
+  ) {
+    const realBalance = await getRealAvailableBalance(waId);
+
+    if (!realBalance) {
+      return {
+        reply: "No pude calcular tu dinero real disponible.",
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    return {
+      reply: `💳 Dinero real disponible\n\nSaldo inicial: ${formatAmount(
+        realBalance.openingBalance
+      )}€\nIngresos del mes: ${formatAmount(
+        realBalance.income
+      )}€\nGastos del mes: ${formatAmount(
+        realBalance.expenses
+      )}€\n\nDisponible real: ${formatAmount(
+        realBalance.realAvailable
+      )}€`,
+      parsed: {
+        amount: null,
+        category: "Otros",
+        description: message.trim(),
+        entryType: "expense",
+      },
+      shouldSaveEntry: false,
+    };
+  }
+
+  if (
+    text === "saldo real estimado" ||
+    text === "saldo real fin de mes" ||
+    text === "dinero real a fin de mes"
+  ) {
+    const realEndBalance = await getRealEndOfMonthBalance(waId);
+
+    if (!realEndBalance) {
+      return {
+        reply: "No pude calcular tu saldo real estimado a fin de mes.",
+        parsed: {
+          amount: null,
+          category: "Otros",
+          description: message.trim(),
+          entryType: "expense",
+        },
+        shouldSaveEntry: false,
+      };
+    }
+
+    return {
+      reply: `📉 Saldo real estimado a fin de mes\n\nSaldo inicial: ${formatAmount(
+        realEndBalance.openingBalance
+      )}€\nIngresos del mes: ${formatAmount(
+        realEndBalance.income
+      )}€\nGastos ya realizados: ${formatAmount(
+        realEndBalance.currentExpenses
+      )}€\n\nDisponible real hoy: ${formatAmount(
+        realEndBalance.realAvailableToday
+      )}€\n\nGasto variable estimado: ${formatAmount(
+        realEndBalance.projectedVariableExpenses
+      )}€\nCuentas fijas pendientes: ${formatAmount(
+        realEndBalance.pendingFixedBills
+      )}€\n\nSaldo real estimado a fin de mes: ${formatAmount(
+        realEndBalance.realEstimatedEndBalance
+      )}€${
+        realEndBalance.pendingBillsList &&
+        realEndBalance.pendingBillsList.length > 0
+          ? `\n\nIncluye:\n${buildPendingBillsLines(
+              realEndBalance.pendingBillsList
+            )}`
+          : ""
+      }`,
       parsed: {
         amount: null,
         category: "Otros",
