@@ -414,20 +414,26 @@ async function getMonthCashflow(waId: string) {
 async function getRealisticProjection(waId: string) {
   const cashflow = await getMonthCashflow(waId);
   const expenseProjection = await getUsageBasedProjection(waId);
+  const pendingBills = await getPendingBillsTotalThisMonth(waId);
 
-  if (!cashflow || !expenseProjection) {
+  if (!cashflow || !expenseProjection || !pendingBills) {
     return null;
   }
 
-  const projectedRemainingExpenses = expenseProjection.projection;
-  const estimatedEndBalance = cashflow.available - projectedRemainingExpenses;
+  const projectedVariableExpenses = expenseProjection.projection;
+  const pendingFixedBills = pendingBills.total;
+
+  const estimatedEndBalance =
+    cashflow.available - projectedVariableExpenses - pendingFixedBills;
 
   return {
     income: cashflow.income,
     currentExpenses: cashflow.expenses,
     availableToday: cashflow.available,
-    projectedRemainingExpenses,
+    projectedVariableExpenses,
+    pendingFixedBills,
     estimatedEndBalance,
+    pendingBillsList: pendingBills.bills,
     daysOfUse: expenseProjection.daysOfUse,
   };
 }
@@ -462,6 +468,36 @@ async function getBills(waId: string) {
   }
 
   return data || [];
+}
+
+async function getPendingBillsTotalThisMonth(waId: string) {
+  const now = new Date();
+  const todayDay = now.getDate();
+
+  const { data, error } = await supabase
+    .from("bills")
+    .select("title, amount, due_day")
+    .eq("wa_id", waId)
+    .eq("is_active", true)
+    .gte("due_day", todayDay)
+    .order("due_day", { ascending: true });
+
+  if (error) {
+    console.error("GET PENDING BILLS TOTAL ERROR:", error);
+    return null;
+  }
+
+  const bills = data || [];
+
+  const total = bills.reduce(
+    (sum, bill) => sum + Number(bill.amount || 0),
+    0
+  );
+
+  return {
+    total,
+    bills,
+  };
 }
 
 async function deactivateBillByTitle(waId: string, title: string) {
@@ -1081,48 +1117,15 @@ async function buildReply(message: string, waId: string) {
   }
 
   if (
-    text === "mis cuentas" ||
-    text === "cuentas" ||
-    text === "ver cuentas"
-  ) {
-    const bills = await getBills(waId);
+  text === "saldo estimado" ||
+  text === "fin de mes" ||
+  text === "saldo fin de mes"
+) {
+  const realisticProjection = await getRealisticProjection(waId);
 
-    if (!bills) {
-      return {
-        reply: "No pude cargar tus cuentas fijas.",
-        parsed: {
-          amount: null,
-          category: "Otros",
-          description: message.trim(),
-          entryType: "expense",
-        },
-        shouldSaveEntry: false,
-      };
-    }
-
-    if (bills.length === 0) {
-      return {
-        reply:
-          "Todavía no tienes cuentas fijas registradas.\n\nPrueba algo como:\n• alquiler 650€ día 5\n• internet 30€ día 12",
-        parsed: {
-          amount: null,
-          category: "Otros",
-          description: message.trim(),
-          entryType: "expense",
-        },
-        shouldSaveEntry: false,
-      };
-    }
-
-    const lines = bills.map(
-      (item) =>
-        `• ${item.title} — ${
-          item.amount !== null ? `${formatAmount(Number(item.amount))}€` : "sin importe"
-        } — día ${item.due_day}`
-    );
-
+  if (!realisticProjection) {
     return {
-      reply: `📌 Tus cuentas fijas\n\n${lines.join("\n")}`,
+      reply: "No pude calcular tu saldo estimado a fin de mes.",
       parsed: {
         amount: null,
         category: "Otros",
@@ -1133,6 +1136,29 @@ async function buildReply(message: string, waId: string) {
     };
   }
 
+  return {
+    reply: `📈 Proyección financiera\n\nIngresos del mes: ${formatAmount(
+      realisticProjection.income
+    )}€\nGastos actuales: ${formatAmount(
+      realisticProjection.currentExpenses
+    )}€\nDisponible hoy: ${formatAmount(
+      realisticProjection.availableToday
+    )}€\n\nGasto variable estimado hasta fin de mes: ${formatAmount(
+      realisticProjection.projectedVariableExpenses
+    )}€\nCuentas fijas pendientes: ${formatAmount(
+      realisticProjection.pendingFixedBills
+    )}€\nSaldo estimado a fin de mes: ${formatAmount(
+      realisticProjection.estimatedEndBalance
+    )}€`,
+    parsed: {
+      amount: null,
+      category: "Otros",
+      description: message.trim(),
+      entryType: "expense",
+    },
+    shouldSaveEntry: false,
+  };
+}
   if (text === "hola" || text === "hi" || text === "hello") {
     return {
       reply:
@@ -1212,7 +1238,7 @@ async function buildReply(message: string, waId: string) {
       )}€\nDisponible hoy: ${formatAmount(
         realisticProjection.availableToday
       )}€\n\nGasto estimado hasta fin de mes: ${formatAmount(
-        realisticProjection.projectedRemainingExpenses
+        realisticProjection.projectedVariableExpenses
       )}€\nSaldo estimado a fin de mes: ${formatAmount(
         realisticProjection.estimatedEndBalance
       )}€`,
@@ -1405,45 +1431,12 @@ async function buildReply(message: string, waId: string) {
   }
 
   if (text === "proyeccion" || text === "proyeccion mes") {
-    const realisticProjection = await getRealisticProjection(waId);
-    const expenseProjection = await getUsageBasedProjection(waId);
+  const realisticProjection = await getRealisticProjection(waId);
+  const expenseProjection = await getUsageBasedProjection(waId);
 
-    if (!realisticProjection || !expenseProjection) {
-      return {
-        reply: "Todavía no tienes suficientes datos este mes para proyectar.",
-        parsed: {
-          amount: null,
-          category: "Otros",
-          description: message.trim(),
-          entryType: "expense",
-        },
-        shouldSaveEntry: false,
-      };
-    }
-
-    const monthSummary = await getMonthSummary(waId);
-    const topCategory = monthSummary
-      ? getTopCategory(monthSummary.summary)
-      : null;
-
+  if (!realisticProjection || !expenseProjection) {
     return {
-      reply: `📈 Proyección del mes\n\nIngresos del mes: ${formatAmount(
-        realisticProjection.income
-      )}€\nGastos actuales: ${formatAmount(
-        realisticProjection.currentExpenses
-      )}€\nDisponible hoy: ${formatAmount(
-        realisticProjection.availableToday
-      )}€\n\nGasto estimado hasta fin de mes: ${formatAmount(
-        realisticProjection.projectedRemainingExpenses
-      )}€\nSaldo estimado a fin de mes: ${formatAmount(
-        realisticProjection.estimatedEndBalance
-      )}€${
-        topCategory
-          ? `\n\nTu categoría principal es ${topCategory.category} con ${formatAmount(
-              topCategory.amount
-            )}€.`
-          : ""
-      }`,
+      reply: "Todavía no tienes suficientes datos este mes para proyectar.",
       parsed: {
         amount: null,
         category: "Otros",
@@ -1453,6 +1446,41 @@ async function buildReply(message: string, waId: string) {
       shouldSaveEntry: false,
     };
   }
+
+  const monthSummary = await getMonthSummary(waId);
+  const topCategory = monthSummary
+    ? getTopCategory(monthSummary.summary)
+    : null;
+
+  return {
+    reply: `📈 Proyección del mes\n\nIngresos del mes: ${formatAmount(
+      realisticProjection.income
+    )}€\nGastos actuales: ${formatAmount(
+      realisticProjection.currentExpenses
+    )}€\nDisponible hoy: ${formatAmount(
+      realisticProjection.availableToday
+    )}€\n\nGasto variable estimado hasta fin de mes: ${formatAmount(
+      realisticProjection.projectedVariableExpenses
+    )}€\nCuentas fijas pendientes: ${formatAmount(
+      realisticProjection.pendingFixedBills
+    )}€\nSaldo estimado a fin de mes: ${formatAmount(
+      realisticProjection.estimatedEndBalance
+    )}€${
+      topCategory
+        ? `\n\nTu categoría principal es ${topCategory.category} con ${formatAmount(
+            topCategory.amount
+          )}€.`
+        : ""
+    }`,
+    parsed: {
+      amount: null,
+      category: "Otros",
+      description: message.trim(),
+      entryType: "expense",
+    },
+    shouldSaveEntry: false,
+  };
+}
 
   if (text === "ultimos gastos" || text === "ultimos 5 gastos") {
     const expenses = await getLastExpenses(waId, 5);
