@@ -79,6 +79,7 @@ function parseBillRegistration(message: string): ParsedBill | null {
   if (dueDayMatch) {
     const rawDay = dueDayMatch[dueDayMatch.length - 1];
     dueDay = Number(rawDay);
+
     if (Number.isNaN(dueDay) || dueDay < 1 || dueDay > 31) {
       dueDay = null;
     }
@@ -100,6 +101,10 @@ function parseBillRegistration(message: string): ParsedBill | null {
   title = title.replace(/\bd[ií]a\s+\d{1,2}\b/gi, "");
   title = title.replace(/\bvence\b/gi, "");
   title = title.replace(/\bel\b/gi, "");
+
+  // remove números soltos que tenham ficado no título
+  title = title.replace(/\b\d+[.,]?\d*\b/g, "");
+
   title = title.replace(/\s+/g, " ").trim();
 
   if (!title) title = "Cuenta";
@@ -460,14 +465,30 @@ async function getBills(waId: string) {
 }
 
 async function deactivateBillByTitle(waId: string, title: string) {
-  const normalizedTarget = normalizeText(title);
-
   const bills = await getBills(waId);
-  if (!bills || bills.length === 0) return { ok: false as const, reason: "not_found" };
 
-  const matched = bills.find(
-    (bill) => normalizeText(bill.title) === normalizedTarget
-  );
+  if (!bills || bills.length === 0) {
+    return { ok: false as const, reason: "not_found" };
+  }
+
+  const normalizeBillName = (value: string) =>
+    normalizeText(value)
+      .replace(/\b\d+[.,]?\d*\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const normalizedTarget = normalizeBillName(title);
+
+  let matched =
+    bills.find(
+      (bill) => normalizeBillName(bill.title) === normalizedTarget
+    ) ||
+    bills.find((bill) =>
+      normalizeBillName(bill.title).includes(normalizedTarget)
+    ) ||
+    bills.find((bill) =>
+      normalizedTarget.includes(normalizeBillName(bill.title))
+    );
 
   if (!matched) {
     return { ok: false as const, reason: "not_found" };
