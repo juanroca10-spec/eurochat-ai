@@ -130,6 +130,29 @@ function extractBillDeleteTitle(message: string) {
   return null;
 }
 
+function parseOpeningBalance(message: string) {
+  const text = normalizeText(message);
+
+  if (
+    !text.includes("saldo inicial") &&
+    !text.includes("mi saldo inicial")
+  ) {
+    return null;
+  }
+
+  const amountMatch =
+    text.match(/(\d+[.,]?\d*)\s*€?/) ||
+    text.match(/€\s*(\d+[.,]?\d*)/);
+
+  if (!amountMatch) return null;
+
+  const amount = Number(amountMatch[1].replace(",", "."));
+
+  if (Number.isNaN(amount)) return null;
+
+  return amount;
+}
+
 function getTodayDateRange() {
   const now = new Date();
 
@@ -218,6 +241,26 @@ function buildSubscriptionPitchMessage() {
     "",
     "Activa tu acceso y empieza ahora.",
   ].join("\n");
+}
+
+async function saveOpeningBalance(waId: string, amount: number) {
+  const { error } = await supabase.from("user_settings").upsert(
+    {
+      wa_id: waId,
+      opening_balance: amount,
+      updated_at: new Date().toISOString(),
+    },
+    {
+      onConflict: "wa_id",
+    }
+  );
+
+  if (error) {
+    console.error("SAVE OPENING BALANCE ERROR:", error);
+    return false;
+  }
+
+  return true;
 }
 
 async function ensureUserExists(waId: string, name?: string) {
