@@ -16,6 +16,7 @@ const YEARLY_PAYMENT_LINK =
 type ParsedEntry = {
   amount: number | null;
   category: string;
+  subcategory: string | null;
   description: string;
   entryType: "income" | "expense";
 };
@@ -24,6 +25,8 @@ type ParsedBill = {
   title: string;
   amount: number | null;
   dueDay: number | null;
+  category: string;
+  subcategory: string | null;
 };
 
 function normalizeText(message: string) {
@@ -110,10 +113,12 @@ function parseBillRegistration(message: string): ParsedBill | null {
   if (!title) title = "Cuenta";
 
   return {
-    title,
-    amount,
-    dueDay,
-  };
+  title,
+  amount,
+  dueDay,
+  category: "Fijos",
+  subcategory: null,
+};
 }
 
 function extractBillDeleteTitle(message: string) {
@@ -902,11 +907,12 @@ function parseEntryWithRules(message: string): ParsedEntry {
   }
 
   return {
-    amount,
-    category,
-    description: message.trim(),
-    entryType,
-  };
+  amount,
+  category,
+  subcategory: null,
+  description: message.trim(),
+  entryType,
+};
 }
 
 function looksLikeContinuation(message: string) {
@@ -977,6 +983,7 @@ Formato exacto:
 {
   "amount": number | null,
   "category": string,
+  "subcategory": string | null,
   "description": string,
   "entryType": "income" | "expense"
 }
@@ -1011,20 +1018,22 @@ ${message}`,
     const parsed = JSON.parse(outputText.trim());
 
     return {
-      amount:
-        typeof parsed.amount === "number" ? parsed.amount : null,
-      category:
-        typeof parsed.category === "string"
-          ? parsed.category
-          : parsed.entryType === "income"
-          ? "Ingreso"
-          : "Otros",
-      description:
-        typeof parsed.description === "string"
-          ? parsed.description
-          : message.trim(),
-      entryType: parsed.entryType === "income" ? "income" : "expense",
-    };
+  amount:
+    typeof parsed.amount === "number" ? parsed.amount : null,
+  category:
+    typeof parsed.category === "string"
+      ? parsed.category
+      : parsed.entryType === "income"
+      ? "Ingreso"
+      : "Otros",
+  subcategory:
+    typeof parsed.subcategory === "string" ? parsed.subcategory : null,
+  description:
+    typeof parsed.description === "string"
+      ? parsed.description
+      : message.trim(),
+  entryType: parsed.entryType === "income" ? "income" : "expense",
+};
   } catch (error) {
     console.error("OPENAI PARSE ERROR:", error);
     return null;
