@@ -1215,14 +1215,15 @@ async function buildReply(message: string, waId: string) {
   const bill = parseBillRegistration(message);
   if (bill && bill.dueDay) {
     const { error } = await supabase.from("bills").insert({
-      wa_id: waId,
-      title: bill.title,
-      amount: bill.amount,
-      due_day: bill.dueDay,
-      frequency: "monthly",
-      category: "Fijos",
-      is_active: true,
-    });
+  wa_id: waId,
+  title: bill.title,
+  amount: bill.amount,
+  due_day: bill.dueDay,
+  frequency: "monthly",
+  category: bill.category,
+  subcategory: bill.subcategory,
+  is_active: true,
+});
 
     if (error) {
       console.error("BILL INSERT ERROR:", error);
@@ -1896,13 +1897,14 @@ export async function POST(req: NextRequest) {
 
     if (shouldSaveEntry && parsed.amount !== null) {
       const cashflowInsert = await supabase.from("cashflow_entries").insert({
-        wa_id: from,
-        type: parsed.entryType,
-        amount: parsed.amount,
-        category: parsed.category,
-        description: parsed.description,
-        source: "whatsapp",
-      });
+  wa_id: from,
+  type: parsed.entryType,
+  amount: parsed.amount,
+  category: parsed.category,
+  subcategory: parsed.subcategory,
+  description: parsed.description,
+  source: "whatsapp",
+});
 
       if (cashflowInsert.error) {
         console.error("CASHFLOW INSERT ERROR:", cashflowInsert.error);
@@ -1910,12 +1912,13 @@ export async function POST(req: NextRequest) {
 
       if (parsed.entryType === "expense") {
         const expenseInsert = await supabase.from("expenses").insert({
-          wa_id: from,
-          amount: parsed.amount,
-          category: parsed.category,
-          description: parsed.description,
-          source: "whatsapp",
-        });
+  wa_id: from,
+  amount: parsed.amount,
+  category: parsed.category,
+  subcategory: parsed.subcategory,
+  description: parsed.description,
+  source: "whatsapp",
+});
 
         if (expenseInsert.error) {
           console.error("SUPABASE INSERT ERROR:", expenseInsert.error);
